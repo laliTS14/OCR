@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Real OCR Extraction (Gemini)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#f7f9fc; --paper:#ffffff; --sunken:#eef2f8; --border:#dde5f0;
+    --ink:#16233d; --ink-muted:#5c6b84; --ink-faint:#8b98ad;
+    --accent:#1b7a8c; --accent-ink:#ffffff; --accent-tint:#e4f2f4;
+    --good:#1f8a5f; --good-tint:#e5f4ec; --warn:#b8791e; --warn-tint:#faf0dd;
+    --crit:#b23a3a; --crit-tint:#f9e7e7;
+    --shadow: 0 1px 2px rgba(22,35,61,0.04), 0 8px 24px -12px rgba(22,35,61,0.12);
+    --radius: 10px;
+  }
+  *{box-sizing:border-box;}
+  html,body{ background:var(--bg); }
+  body{ margin:0; color:var(--ink); font-family:"IBM Plex Sans", system-ui, sans-serif; -webkit-font-smoothing:antialiased; }
+  .wrap{ max-width:920px; margin:0 auto; padding:2.75rem 1.5rem 5rem; }
+
+  .eyebrow{ font-size:0.72rem; font-weight:600; letter-spacing:0.09em; text-transform:uppercase; color:var(--accent); margin:0 0 0.6rem; }
+  h1{ font-family:"Fraunces", Georgia, serif; font-weight:600; font-size:2rem; letter-spacing:-0.01em; margin:0 0 0.55rem; text-wrap:balance; }
+  .lede{ color:var(--ink-muted); font-size:1rem; line-height:1.55; max-width:66ch; margin:0 0 1.6rem; }
+
+  .demo-note{ display:flex; gap:0.6rem; align-items:flex-start; background:var(--sunken); border:1px solid var(--border); border-radius:var(--radius); padding:0.8rem 1rem; font-size:0.87rem; color:var(--ink-muted); margin-bottom:2rem; }
+  .demo-note strong{ color:var(--ink); }
+  .demo-note svg{ flex:none; margin-top:0.15rem; color:var(--accent); }
+  .demo-note.warn{ background:var(--warn-tint); }
+  .demo-note.warn svg{ color:var(--warn); }
+
+  .card{ background:var(--paper); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); }
+
+  .upload{ padding:1.4rem; display:flex; align-items:center; gap:1.1rem; flex-wrap:wrap; margin-bottom:1.4rem; }
+  .drop{ flex:1 1 320px; border:1.5px dashed var(--border); border-radius:8px; padding:1.1rem 1.2rem; display:flex; align-items:center; gap:0.9rem; cursor:pointer; background:var(--sunken); transition:border-color .15s ease, background .15s ease; }
+  .drop:hover, .drop:focus-visible{ border-color:var(--accent); background:var(--accent-tint); outline:none; }
+  .drop svg{ flex:none; color:var(--accent); }
+  .drop-text b{ display:block; font-size:0.94rem; color:var(--ink); }
+  .drop-text span{ font-size:0.82rem; color:var(--ink-faint); }
+  input[type="file"]{ display:none; }
+
+  .btn{ font-family:inherit; font-size:0.87rem; font-weight:600; border-radius:7px; padding:0.65rem 1.05rem; border:1px solid var(--border); background:var(--paper); color:var(--ink); cursor:pointer; white-space:nowrap; transition:background .15s ease, border-color .15s ease, transform .05s ease; }
+  .btn:hover{ border-color:var(--accent); }
+  .btn:active{ transform:translateY(1px); }
+  .btn:disabled{ opacity:0.5; cursor:not-allowed; }
+  .btn-primary{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+  .btn-primary:hover{ filter:brightness(1.06); }
+  .file-chip{ font-size:0.82rem; color:var(--ink-muted); font-family:"IBM Plex Mono", monospace; }
+
+  .status{ padding:1rem 1.2rem; display:none; align-items:center; gap:0.7rem; font-size:0.9rem; color:var(--ink-muted); margin-bottom:1.4rem; }
+  .status.show{ display:flex; }
+  .spinner{ width:18px; height:18px; border-radius:50%; border:2.5px solid var(--border); border-top-color:var(--accent); animation:spin 0.8s linear infinite; flex:none; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+
+  .error-box{ display:none; background:var(--crit-tint); border:1px solid #f0c4c4; border-radius:var(--radius); padding:1rem 1.2rem; color:var(--crit); font-size:0.87rem; margin-bottom:1.4rem; white-space:pre-wrap; }
+  .error-box.show{ display:block; }
+
+  .summary{ display:grid; grid-template-columns:repeat(2, 1fr); gap:1px; background:var(--border); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; margin-bottom:1.4rem; max-width:22rem; }
+  .summary div{ background:var(--paper); padding:0.95rem 1.1rem; }
+  .summary .num{ font-family:"IBM Plex Mono", monospace; font-size:1.5rem; font-weight:600; line-height:1.1; font-variant-numeric:tabular-nums; }
+  .summary .lbl{ font-size:0.74rem; color:var(--ink-muted); margin-top:0.25rem; }
+  .summary .num.flagged{ color:var(--warn); }
+
+  .patient-card{ padding:1.2rem 1.3rem; margin-bottom:1.4rem; }
+  .patient-card h3{ font-family:"Fraunces", Georgia, serif; font-weight:600; font-size:1rem; margin:0 0 0.9rem; }
+  .field-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:0.9rem 1.2rem; }
+  .field-grid .f-label{ font-size:0.68rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-faint); margin-bottom:0.2rem; }
+  .field-grid .f-value{ font-size:0.9rem; color:var(--ink); }
+  .field-grid .f-value.empty{ color:var(--ink-faint); font-style:italic; }
+  .report-meta{ display:flex; flex-wrap:wrap; gap:0.4rem 1.1rem; font-size:0.78rem; color:var(--ink-muted); padding:0.7rem 1.3rem; background:var(--paper); border-bottom:1px solid var(--border); }
+  .report-meta span b{ color:var(--ink); font-weight:600; }
+
+  .segment{ overflow:hidden; margin-bottom:1.4rem; }
+  .seg-head{ padding:1.05rem 1.3rem; display:flex; justify-content:space-between; align-items:center; gap:1rem; border-bottom:1px solid var(--border); background:var(--sunken); flex-wrap:wrap; }
+  .seg-head h3{ font-family:"Fraunces", Georgia, serif; font-weight:600; font-size:1.05rem; margin:0; }
+  .pill{ display:inline-flex; align-items:center; gap:0.35rem; font-size:0.72rem; font-weight:600; padding:0.28rem 0.6rem; border-radius:99px; }
+  .pill-good{ background:var(--good-tint); color:var(--good); }
+  .pill-warn{ background:var(--warn-tint); color:var(--warn); }
+
+  .table-scroll{ overflow-x:auto; }
+  table{ width:100%; border-collapse:collapse; font-size:0.87rem; }
+  thead th{ text-align:left; font-size:0.7rem; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:var(--ink-faint); padding:0.65rem 1.1rem; border-bottom:1px solid var(--border); white-space:nowrap; }
+  tbody td{ padding:0.6rem 1.1rem; border-bottom:1px solid var(--border); vertical-align:middle; }
+  tbody tr:last-child td{ border-bottom:none; }
+  tbody tr.needs-review{ background:var(--warn-tint); }
+  .test-name{ font-weight:600; }
+  .mono{ font-family:"IBM Plex Mono", monospace; font-variant-numeric:tabular-nums; }
+  .flag{ font-weight:600; font-size:0.82rem; }
+  .flag-high, .flag-low{ color:var(--warn); }
+  .flag-normal{ color:var(--good); }
+  .conf{ display:flex; align-items:center; gap:0.4rem; font-family:"IBM Plex Mono", monospace; font-size:0.8rem; color:var(--ink-muted); }
+  .conf-dot{ width:7px; height:7px; border-radius:50%; flex:none; }
+  .conf-high .conf-dot{ background:var(--good); } .conf-mid .conf-dot{ background:var(--warn); } .conf-low .conf-dot{ background:var(--crit); }
+
+  .meta-row{ font-size:0.78rem; color:var(--ink-faint); margin-bottom:1rem; }
+  .empty-state{ text-align:center; padding:3rem 1rem; color:var(--ink-faint); font-size:0.9rem; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <p class="eyebrow">PIMS &middot; Real Extraction Proof of Concept</p>
+  <h1>Real OCR extraction, powered by Gemini</h1>
+  <p class="lede">Upload an actual diagnostic report. This calls the real Gemini API — no simulated data. Results (and any errors) are exactly what the model returns.</p>
+
+  <div class="demo-note warn">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.5 1 14h14L8 1.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 6.5v3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="12" r="0.9" fill="currentColor"/></svg>
+    <div><strong>Proof of concept, not production.</strong> Confidence scores here are the model's own self-assessment, not a calibrated OCR confidence — treat them as a rough signal only, per the earlier design discussion. Every field should still be reviewed by a person before use.</div>
+  </div>
+
+  <div class="card upload">
+    <label class="drop" id="dropZone" tabindex="0">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15V4M12 4l-4 4M12 4l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <span class="drop-text">
+        <b>Upload a real DC report</b>
+        <span>PDF, JPG or PNG &middot; up to 15MB</span>
+      </span>
+      <input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png">
+    </label>
+    <span class="file-chip" id="fileChip">No file chosen</span>
+  </div>
+
+  <div class="status" id="status">
+    <span class="spinner"></span>
+    <span id="statusText">Sending to Gemini and waiting for a response&hellip; this can take 10&ndash;30 seconds.</span>
+  </div>
+
+  <div class="error-box" id="errorBox"></div>
+
+  <div id="resultsRoot">
+    <div class="card">
+      <div class="empty-state">Upload a report above to run a real extraction.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var fileInput = document.getElementById('fileInput');
+  var dropZone = document.getElementById('dropZone');
+  var fileChip = document.getElementById('fileChip');
+  var status = document.getElementById('status');
+  var statusText = document.getElementById('statusText');
+  var errorBox = document.getElementById('errorBox');
+  var resultsRoot = document.getElementById('resultsRoot');
+
+  dropZone.addEventListener('keydown', function(e){
+    if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); fileInput.click(); }
+  });
+
+  fileInput.addEventListener('change', function(){
+    var f = fileInput.files && fileInput.files[0];
+    if (!f) return;
+    fileChip.textContent = f.name;
+    runExtraction(f);
+  });
+
+  async function runExtraction(file){
+    errorBox.classList.remove('show');
+    resultsRoot.innerHTML = '';
+    status.classList.add('show');
+    statusText.textContent = 'Sending "' + file.name + '" to Gemini and waiting for a response… this can take 10–30 seconds.';
+
+    var formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      var res = await fetch('/api/extract', { method: 'POST', body: formData });
+      var payload = await res.json();
+      if (!res.ok) throw new Error(payload.error || ('Request failed with status ' + res.status));
+      render(payload);
+    } catch (err) {
+      errorBox.textContent = 'Extraction failed: ' + err.message;
+      errorBox.classList.add('show');
+      resultsRoot.innerHTML = '<div class="card"><div class="empty-state">No result to show.</div></div>';
+    } finally {
+      status.classList.remove('show');
+    }
+  }
+
+  function fieldHtml(label, value){
+    var hasValue = value != null && String(value).trim() !== '';
+    return '<div><div class="f-label">' + escapeHtml(label) + '</div><div class="f-value' + (hasValue ? '' : ' empty') + '">' +
+      (hasValue ? escapeHtml(value) : 'Not found') + '</div></div>';
+  }
+
+  function render(payload){
+    var patient = (payload.data && payload.data.patient) || {};
+    var reports = (payload.data && payload.data.reports) || [];
+    resultsRoot.innerHTML = '';
+
+    var meta = document.createElement('div');
+    meta.className = 'meta-row';
+    meta.textContent = 'File: ' + payload.fileName + '  ·  Model: ' + payload.model;
+    resultsRoot.appendChild(meta);
+
+    var patientCard = document.createElement('div');
+    patientCard.className = 'card patient-card';
+    patientCard.innerHTML =
+      '<h3>Patient Information</h3>' +
+      '<div class="field-grid">' +
+        fieldHtml('Name', patient.name) +
+        fieldHtml('Age', patient.age) +
+        fieldHtml('Sex', patient.sex) +
+        fieldHtml('Patient / UHID', patient.patient_id) +
+        fieldHtml('Contact number', patient.contact_number) +
+      '</div>';
+    resultsRoot.appendChild(patientCard);
+
+    if (reports.length === 0){
+      var empty = document.createElement('div');
+      empty.className = 'card';
+      empty.innerHTML = '<div class="empty-state">Gemini did not return any recognizable report rows for this file.</div>';
+      resultsRoot.appendChild(empty);
+      return;
+    }
+
+    var totalFields = 0;
+    reports.forEach(function(r){ totalFields += (r.rows || []).length; });
+
+    var summary = document.createElement('div');
+    summary.className = 'summary';
+    summary.innerHTML =
+      '<div><div class="num">' + reports.length + '</div><div class="lbl">Reports detected</div></div>' +
+      '<div><div class="num">' + totalFields + '</div><div class="lbl">Fields extracted</div></div>';
+    resultsRoot.appendChild(summary);
+
+    reports.forEach(function(report){
+      var rows = report.rows || [];
+
+      var card = document.createElement('section');
+      card.className = 'card segment';
+
+      var head = document.createElement('div');
+      head.className = 'seg-head';
+      head.innerHTML = '<h3>' + escapeHtml(report.report_type || 'Report') + '</h3>';
+      card.appendChild(head);
+
+      var metaParts = [];
+      if (report.lab_name) metaParts.push('<span><b>Lab:</b> ' + escapeHtml(report.lab_name) + '</span>');
+      if (report.referring_doctor) metaParts.push('<span><b>Referred by:</b> ' + escapeHtml(report.referring_doctor) + '</span>');
+      if (report.sample_collected_date) metaParts.push('<span><b>Collected:</b> ' + escapeHtml(report.sample_collected_date) + '</span>');
+      if (report.report_date) metaParts.push('<span><b>Reported:</b> ' + escapeHtml(report.report_date) + '</span>');
+      if (metaParts.length){
+        var metaRow = document.createElement('div');
+        metaRow.className = 'report-meta';
+        metaRow.innerHTML = metaParts.join('');
+        card.appendChild(metaRow);
+      }
+
+      var tableScroll = document.createElement('div');
+      tableScroll.className = 'table-scroll';
+      var table = document.createElement('table');
+      table.innerHTML = '<thead><tr><th>Test</th><th>Result</th><th>Unit</th><th>Reference range</th></tr></thead>';
+      var tbody = document.createElement('tbody');
+
+      rows.forEach(function(row){
+        var tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td class="test-name">' + escapeHtml(row.test) + '</td>' +
+          '<td class="mono">' + escapeHtml(row.value) + '</td>' +
+          '<td class="mono">' + escapeHtml(row.unit) + '</td>' +
+          '<td class="mono">' + escapeHtml(row.range) + '</td>';
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      tableScroll.appendChild(table);
+      card.appendChild(tableScroll);
+      resultsRoot.appendChild(card);
+    });
+  }
+
+  function escapeHtml(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+    });
+  }
+})();
+</script>
+
+</body>
+</html>

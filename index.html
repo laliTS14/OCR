@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Report Extraction Walkthrough</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#f7f9fc;
+    --paper:#ffffff;
+    --sunken:#eef2f8;
+    --border:#dde5f0;
+    --ink:#16233d;
+    --ink-muted:#5c6b84;
+    --ink-faint:#8b98ad;
+    --accent:#1b7a8c;
+    --accent-ink:#ffffff;
+    --accent-tint:#e4f2f4;
+    --good:#1f8a5f;
+    --good-tint:#e5f4ec;
+    --warn:#b8791e;
+    --warn-tint:#faf0dd;
+    --crit:#b23a3a;
+    --crit-tint:#f9e7e7;
+    --shadow: 0 1px 2px rgba(22,35,61,0.04), 0 8px 24px -12px rgba(22,35,61,0.12);
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0f1620; --paper:#161f2c; --sunken:#1d2836; --border:#2a374a;
+      --ink:#e8edf6; --ink-muted:#94a3ba; --ink-faint:#69778f;
+      --accent:#4fb8c9; --accent-ink:#0f1620; --accent-tint:#152a2f;
+      --good:#4bc98f; --good-tint:#123024; --warn:#e3ab4d; --warn-tint:#332510;
+      --crit:#e07272; --crit-tint:#341717;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -12px rgba(0,0,0,0.5);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0f1620; --paper:#161f2c; --sunken:#1d2836; --border:#2a374a;
+    --ink:#e8edf6; --ink-muted:#94a3ba; --ink-faint:#69778f;
+    --accent:#4fb8c9; --accent-ink:#0f1620; --accent-tint:#152a2f;
+    --good:#4bc98f; --good-tint:#123024; --warn:#e3ab4d; --warn-tint:#332510;
+    --crit:#e07272; --crit-tint:#341717;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -12px rgba(0,0,0,0.5);
+  }
+
+  *{box-sizing:border-box;}
+  html,body{ background:var(--bg); }
+  body{
+    margin:0;
+    color:var(--ink);
+    font-family:"IBM Plex Sans", system-ui, sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{ max-width:980px; margin:0 auto; padding:2.75rem 1.5rem 5rem; }
+
+  .eyebrow{
+    font-size:0.72rem; font-weight:600; letter-spacing:0.09em; text-transform:uppercase;
+    color:var(--accent); margin:0 0 0.6rem;
+  }
+  h1{
+    font-family:"Fraunces", Georgia, serif; font-weight:600; font-size:2.05rem;
+    letter-spacing:-0.01em; margin:0 0 0.55rem; text-wrap:balance;
+  }
+  .lede{ color:var(--ink-muted); font-size:1.02rem; line-height:1.55; max-width:66ch; margin:0 0 1.6rem; }
+  .demo-note{
+    display:flex; gap:0.6rem; align-items:flex-start; background:var(--sunken);
+    border:1px solid var(--border); border-radius:var(--radius); padding:0.8rem 1rem;
+    font-size:0.87rem; color:var(--ink-muted); margin-bottom:2rem;
+  }
+  .demo-note strong{ color:var(--ink); }
+  .demo-note svg{ flex:none; margin-top:0.15rem; color:var(--accent); }
+
+  .card{ background:var(--paper); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); }
+
+  /* ---------- Upload ---------- */
+  .upload{ padding:1.4rem; display:flex; align-items:center; gap:1.1rem; flex-wrap:wrap; margin-bottom:1.8rem; }
+  .drop{
+    flex:1 1 320px; border:1.5px dashed var(--border); border-radius:8px; padding:1.1rem 1.2rem;
+    display:flex; align-items:center; gap:0.9rem; cursor:pointer; background:var(--sunken);
+    transition:border-color .15s ease, background .15s ease;
+  }
+  .drop:hover, .drop:focus-visible{ border-color:var(--accent); background:var(--accent-tint); outline:none; }
+  .drop svg{ flex:none; color:var(--accent); }
+  .drop-text b{ display:block; font-size:0.94rem; color:var(--ink); }
+  .drop-text span{ font-size:0.82rem; color:var(--ink-faint); }
+  input[type="file"]{ display:none; }
+
+  .btn{
+    font-family:inherit; font-size:0.87rem; font-weight:600; border-radius:7px; padding:0.65rem 1.05rem;
+    border:1px solid var(--border); background:var(--paper); color:var(--ink); cursor:pointer;
+    white-space:nowrap; transition:background .15s ease, border-color .15s ease, transform .05s ease;
+  }
+  .btn:hover{ border-color:var(--accent); }
+  .btn:active{ transform:translateY(1px); }
+  .btn:disabled{ opacity:0.4; cursor:not-allowed; }
+  .btn-primary{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+  .btn-primary:hover{ filter:brightness(1.06); }
+  .btn:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+  .file-chip{ font-size:0.82rem; color:var(--ink-muted); font-family:"IBM Plex Mono", monospace; }
+
+  /* ---------- Wizard nav ---------- */
+  .wizard-nav{ display:grid; grid-template-columns:repeat(4,1fr); gap:0; position:relative; margin-bottom:1.6rem; }
+  .wizard-nav::before{
+    content:""; position:absolute; top:19px; left:calc(12.5% + 4px); right:calc(12.5% + 4px);
+    height:2px; background:var(--border); z-index:0;
+  }
+  .wizard-step{
+    position:relative; z-index:1; display:flex; flex-direction:column; align-items:center; text-align:center;
+    gap:0.5rem; background:none; border:none; cursor:pointer; font-family:inherit; padding:0.3rem;
+  }
+  .wizard-step .dot{
+    width:38px; height:38px; border-radius:50%; background:var(--paper); border:2px solid var(--border);
+    display:flex; align-items:center; justify-content:center; font-family:"IBM Plex Mono", monospace;
+    font-size:0.92rem; font-weight:600; color:var(--ink-faint); transition:all .2s ease;
+  }
+  .wizard-step .lbl{ font-size:0.78rem; font-weight:600; color:var(--ink-faint); max-width:9rem; }
+  .wizard-step.current .dot{ border-color:var(--accent); color:var(--accent); background:var(--accent-tint); box-shadow:0 0 0 4px var(--accent-tint); }
+  .wizard-step.current .lbl{ color:var(--ink); }
+  .wizard-step.past .dot{ border-color:var(--good); background:var(--good); color:#fff; }
+  .wizard-step.past .lbl{ color:var(--ink); }
+  @media (max-width:640px){ .wizard-step .lbl{ display:none; } }
+
+  /* ---------- Stage panel shell ---------- */
+  .stage{ padding:1.6rem; display:none; }
+  .stage.active{ display:block; }
+  .stage-kicker{ font-size:0.72rem; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:var(--accent); margin:0 0 0.4rem; }
+  .stage-title{ font-family:"Fraunces", Georgia, serif; font-size:1.4rem; font-weight:600; margin:0 0 0.5rem; text-wrap:balance; }
+  .stage-caption{ color:var(--ink-muted); font-size:0.92rem; line-height:1.55; max-width:70ch; margin:0 0 1.4rem; }
+  .stage-nav{ display:flex; justify-content:space-between; align-items:center; margin-top:1.6rem; padding-top:1.2rem; border-top:1px solid var(--border); }
+  .stage-progress{ font-size:0.78rem; color:var(--ink-faint); font-family:"IBM Plex Mono", monospace; }
+
+  /* ---------- Step 1: file breakdown ---------- */
+  .file-summary{ display:flex; align-items:center; gap:0.9rem; background:var(--sunken); border:1px solid var(--border); border-radius:8px; padding:0.9rem 1.1rem; margin-bottom:1.4rem; }
+  .file-summary svg{ flex:none; color:var(--accent); }
+  .file-summary b{ display:block; font-size:0.94rem; }
+  .file-summary span{ font-size:0.8rem; color:var(--ink-muted); }
+  .pages-row{ display:flex; gap:1.2rem; flex-wrap:wrap; align-items:flex-start; }
+  .page-block{ display:flex; flex-direction:column; align-items:center; gap:0.6rem; }
+  .page-thumb{
+    width:150px; height:190px; background:var(--paper); border:2px dashed var(--accent); border-radius:6px;
+    position:relative; padding:10px; box-shadow:var(--shadow);
+  }
+  .page-thumb .ph-header{ height:14px; width:70%; background:var(--accent); opacity:0.25; border-radius:3px; margin-bottom:10px; }
+  .page-thumb .ph-line{ height:6px; background:var(--border); border-radius:3px; margin-bottom:6px; }
+  .page-thumb .ph-line.short{ width:55%; }
+  .page-thumb .ph-table{ margin-top:10px; border:1px solid var(--border); border-radius:3px; overflow:hidden; }
+  .page-thumb .ph-row{ height:11px; border-bottom:1px solid var(--border); background:var(--sunken); }
+  .page-thumb .ph-row:last-child{ border-bottom:none; }
+  .page-label{ font-size:0.8rem; font-weight:600; }
+  .page-sub{ font-size:0.74rem; color:var(--ink-muted); }
+  .bundle-arrow{ display:flex; align-items:center; color:var(--ink-faint); align-self:center; }
+
+  /* ---------- Step 2: OCR ---------- */
+  .ocr-grid{ display:grid; grid-template-columns:1fr 1fr; gap:1.4rem; align-items:start; }
+  @media (max-width:720px){ .ocr-grid{ grid-template-columns:1fr; } }
+  .doc-mock{
+    position:relative; overflow:hidden; background:var(--paper); border:1px solid var(--border); border-radius:8px;
+    padding:16px; box-shadow:var(--shadow);
+  }
+  .doc-mock .ph-header{ height:16px; width:60%; background:var(--accent); opacity:0.3; border-radius:3px; margin-bottom:12px; }
+  .doc-mock .ph-line{ height:7px; background:var(--border); border-radius:3px; margin-bottom:8px; }
+  .doc-mock .ph-line.w70{ width:70%; } .doc-mock .ph-line.w40{ width:40%; } .doc-mock .ph-line.w85{ width:85%; }
+  .doc-mock .ph-table{ margin-top:14px; border:1px solid var(--border); border-radius:4px; overflow:hidden; }
+  .doc-mock .ph-row{ height:20px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:6px; padding:0 8px; }
+  .doc-mock .ph-row:last-child{ border-bottom:none; }
+  .doc-mock .ph-row .c{ height:7px; background:var(--sunken); border-radius:3px; }
+  .scan-bar{
+    position:absolute; left:0; right:0; height:34px; top:-40px;
+    background:linear-gradient(180deg, transparent, var(--accent-tint) 45%, var(--accent) 50%, var(--accent-tint) 55%, transparent);
+    opacity:0; pointer-events:none;
+  }
+  .doc-mock.scanning .scan-bar{ animation: scanSweep 1.8s ease-in-out 1; }
+  @keyframes scanSweep{
+    0%{ top:-40px; opacity:0; } 8%{ opacity:0.85; } 92%{ opacity:0.85; } 100%{ top:100%; opacity:0; }
+  }
+  .raw-box{
+    background:var(--sunken); border:1px solid var(--border); border-radius:8px; padding:1rem 1.1rem;
+    font-family:"IBM Plex Mono", monospace; font-size:0.82rem; line-height:1.75; color:var(--ink);
+    min-height:230px;
+  }
+  .raw-box .rl{ opacity:0; transform:translateY(4px); white-space:pre; }
+  .raw-box.revealed .rl{ animation: rlIn .35s ease forwards; }
+  .raw-box .rl.dim{ color:var(--ink-faint); }
+  @keyframes rlIn{ to{ opacity:1; transform:none; } }
+
+  /* ---------- Step 3: categorization ---------- */
+  .map-row{
+    display:grid; grid-template-columns:1fr auto 1.6fr; gap:1rem; align-items:center;
+    padding:1rem 0; border-bottom:1px solid var(--border);
+  }
+  .map-row:last-child{ border-bottom:none; }
+  .map-raw{ font-family:"IBM Plex Mono", monospace; font-size:0.82rem; background:var(--sunken); border:1px solid var(--border); border-radius:6px; padding:0.7rem 0.8rem; white-space:pre-wrap; }
+  .map-arrow{ color:var(--accent); font-size:1.2rem; }
+  .map-tags{ display:flex; flex-wrap:wrap; gap:0.4rem; }
+  .tag-chip{ display:inline-flex; flex-direction:column; align-items:flex-start; gap:0.05rem; padding:0.32rem 0.55rem; border-radius:6px; font-size:0.8rem; font-weight:600; line-height:1.2; }
+  .tag-chip i{ font-style:normal; font-size:0.62rem; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; opacity:0.75; }
+  .tag-test{ background:var(--accent-tint); color:var(--accent); }
+  .tag-value{ background:var(--good-tint); color:var(--good); }
+  .tag-neutral{ background:var(--sunken); color:var(--ink-muted); border:1px solid var(--border); }
+  .tag-warn{ background:var(--warn-tint); color:var(--warn); }
+  .map-legend{ display:flex; flex-wrap:wrap; gap:0.9rem; margin-top:1.2rem; font-size:0.78rem; color:var(--ink-muted); }
+  .map-legend span{ display:inline-flex; align-items:center; gap:0.35rem; }
+  .map-legend i{ width:9px; height:9px; border-radius:50%; display:inline-block; }
+
+  /* ---------- Step 4: results (final table) ---------- */
+  .summary{ display:grid; grid-template-columns:repeat(4, 1fr); gap:1px; background:var(--border); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; margin-bottom:1.4rem; }
+  .summary div{ background:var(--paper); padding:0.95rem 1.1rem; }
+  .summary .num{ font-family:"IBM Plex Mono", monospace; font-size:1.5rem; font-weight:600; line-height:1.1; font-variant-numeric:tabular-nums; }
+  .summary .lbl{ font-size:0.74rem; color:var(--ink-muted); margin-top:0.25rem; }
+  .summary .num.flagged{ color:var(--warn); }
+
+  .segment{ overflow:hidden; margin-bottom:1.4rem; }
+  .seg-head{ padding:1.05rem 1.3rem; display:flex; justify-content:space-between; align-items:center; gap:1rem; border-bottom:1px solid var(--border); background:var(--sunken); flex-wrap:wrap; }
+  .seg-head h3{ font-family:"Fraunces", Georgia, serif; font-weight:600; font-size:1.08rem; margin:0; }
+  .seg-meta{ font-size:0.78rem; color:var(--ink-muted); margin-top:0.2rem; }
+  .pill{ display:inline-flex; align-items:center; gap:0.35rem; font-size:0.72rem; font-weight:600; padding:0.28rem 0.6rem; border-radius:99px; letter-spacing:0.01em; }
+  .pill-good{ background:var(--good-tint); color:var(--good); }
+  .pill-warn{ background:var(--warn-tint); color:var(--warn); }
+
+  .table-scroll{ overflow-x:auto; }
+  table{ width:100%; border-collapse:collapse; font-size:0.88rem; }
+  thead th{ text-align:left; font-size:0.7rem; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:var(--ink-faint); padding:0.7rem 1.3rem; border-bottom:1px solid var(--border); white-space:nowrap; }
+  tbody td{ padding:0.7rem 1.3rem; border-bottom:1px solid var(--border); vertical-align:middle; }
+  tbody tr:last-child td{ border-bottom:none; }
+  tbody tr.needs-review{ background:var(--warn-tint); }
+  .test-name{ font-weight:600; }
+  .mono{ font-family:"IBM Plex Mono", monospace; font-variant-numeric:tabular-nums; }
+  .value-cell{ display:flex; align-items:center; gap:0.5rem; }
+  .value-input{ font-family:"IBM Plex Mono", monospace; font-size:0.88rem; font-weight:600; color:var(--ink); background:var(--paper); border:1px solid var(--border); border-radius:6px; padding:0.3rem 0.5rem; width:5.5rem; }
+  .value-input:focus{ outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent); }
+  .flag{ display:inline-flex; align-items:center; gap:0.25rem; font-weight:600; font-size:0.82rem; }
+  .flag-high{ color:var(--warn); } .flag-low{ color:var(--warn); } .flag-normal{ color:var(--good); }
+  .conf{ display:flex; align-items:center; gap:0.45rem; font-family:"IBM Plex Mono", monospace; font-size:0.82rem; color:var(--ink-muted); }
+  .conf-dot{ width:7px; height:7px; border-radius:50%; flex:none; }
+  .conf-high .conf-dot{ background:var(--good); } .conf-mid .conf-dot{ background:var(--warn); } .conf-low .conf-dot{ background:var(--crit); }
+  .source-tag{ font-size:0.7rem; color:var(--ink-faint); }
+  .source-tag.corrected{ color:var(--accent); font-weight:600; }
+  .seg-foot{ padding:0.8rem 1.3rem; display:flex; justify-content:space-between; align-items:center; background:var(--sunken); border-top:1px solid var(--border); flex-wrap:wrap; gap:0.6rem; }
+  .seg-foot-note{ font-size:0.78rem; color:var(--ink-muted); }
+  .reviewed-badge{ display:none; align-items:center; gap:0.35rem; }
+  .reviewed-badge.on{ display:inline-flex; }
+
+  @media (prefers-reduced-motion: reduce){ *{ transition-duration:0.001ms !important; animation-duration:0.001ms !important; } }
+  @media (max-width:640px){ .summary{ grid-template-columns:repeat(2,1fr); } .map-row{ grid-template-columns:1fr; } .map-arrow{ display:none; } }
+
+  /* ---------- Approaches & pricing (below the walkthrough) ---------- */
+  .section-block{ margin-top:3.2rem; }
+  .section-block > .stage-kicker{ margin-top:0; }
+
+  .family-grid{ display:grid; grid-template-columns:1fr 1fr; gap:1.2rem; margin-bottom:0.5rem; }
+  @media (max-width:720px){ .family-grid{ grid-template-columns:1fr; } }
+  .family-card{ background:var(--paper); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden; }
+  .family-head{ padding:1rem 1.2rem; color:#fff; }
+  .family-head.dark{ background:var(--ink); }
+  .family-head.accent{ background:var(--accent); }
+  .family-head h3{ font-family:"Fraunces", Georgia, serif; font-size:1.05rem; font-weight:600; margin:0 0 0.2rem; }
+  .family-head p{ margin:0; font-size:0.8rem; opacity:0.85; }
+  .family-body{ padding:1.1rem 1.2rem; display:flex; flex-direction:column; gap:0.6rem; }
+  .family-item{ display:flex; gap:0.55rem; align-items:flex-start; font-size:0.86rem; color:var(--ink); line-height:1.4; }
+  .family-item .fdot{ width:7px; height:7px; border-radius:50%; margin-top:0.45rem; flex:none; background:var(--accent); }
+  .family-card.tone-dark .fdot{ background:var(--ink); }
+
+  .cost-table-wrap table{ font-size:0.82rem; min-width:820px; }
+  .cost-table-wrap thead th{ padding:0.6rem 0.9rem; }
+  .cost-table-wrap tbody td{ padding:0.6rem 0.9rem; }
+  .cost-table-wrap tbody tr.best-row{ background:var(--good-tint); }
+  .cost-table-wrap tbody tr.best-row td:first-child{ font-weight:700; color:var(--good); }
+  .best-badge{ display:inline-block; margin-left:0.4rem; font-size:0.62rem; font-weight:700; letter-spacing:0.03em; text-transform:uppercase; color:var(--good); background:var(--paper); border:1px solid var(--good); border-radius:99px; padding:0.08rem 0.4rem; vertical-align:middle; }
+  .cost-note{ font-size:0.82rem; color:var(--ink-muted); line-height:1.55; margin-top:1rem; }
+  .cost-note strong{ color:var(--ink); }
+  .pricing-date{ font-size:0.74rem; color:var(--ink-faint); margin-top:0.4rem; }
+
+  .rec-list{ display:flex; flex-direction:column; gap:0.9rem; }
+  .rec-item{ display:flex; gap:1rem; align-items:flex-start; background:var(--sunken); border:1px solid var(--border); border-radius:var(--radius); padding:1rem 1.2rem; }
+  .rec-num{ flex:none; width:2rem; height:2rem; border-radius:50%; background:var(--accent); color:#fff; font-family:"IBM Plex Mono", monospace; font-weight:600; font-size:0.92rem; display:flex; align-items:center; justify-content:center; }
+  .rec-item h4{ margin:0 0 0.25rem; font-size:0.95rem; font-weight:700; color:var(--ink); }
+  .rec-item p{ margin:0; font-size:0.85rem; color:var(--ink-muted); line-height:1.5; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <p class="eyebrow">PIMS &middot; Report Digitization</p>
+  <h1>How a DC report becomes structured data</h1>
+  <p class="lede">A walkthrough of what happens between a diagnostic centre uploading a report and PIMS having clean, tabular test results — click through each stage below.</p>
+
+  <div class="demo-note">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.4"/><path d="M8 7.2v4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="5" r="0.9" fill="currentColor"/></svg>
+    <div><strong>Simulated walkthrough.</strong> No OCR engine runs here &mdash; every screen is illustrative, standing in for what a live OCR/document-AI integration (e.g. AWS Textract or Azure Document Intelligence) would actually do at each stage.</div>
+  </div>
+
+  <div class="card upload">
+    <label class="drop" id="dropZone" tabindex="0">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15V4M12 4l-4 4M12 4l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <span class="drop-text">
+        <b>Upload a DC report</b>
+        <span>PDF, JPG or PNG &middot; drag in or click to browse</span>
+      </span>
+      <input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png">
+    </label>
+    <button class="btn btn-primary" id="runSample" type="button">Run sample report</button>
+    <span class="file-chip" id="fileChip">sample_report_bundle.pdf</span>
+  </div>
+
+  <div class="wizard-nav" id="wizardNav">
+    <button class="wizard-step" data-step="0" type="button"><span class="dot">1</span><span class="lbl">Upload</span></button>
+    <button class="wizard-step" data-step="1" type="button"><span class="dot">2</span><span class="lbl">Text extraction (OCR)</span></button>
+    <button class="wizard-step" data-step="2" type="button"><span class="dot">3</span><span class="lbl">Categorization</span></button>
+    <button class="wizard-step" data-step="3" type="button"><span class="dot">4</span><span class="lbl">Structured result</span></button>
+  </div>
+
+  <div class="card">
+
+    <!-- STEP 1 -->
+    <section class="stage" data-stage="0">
+      <p class="stage-kicker">Step 1 of 4 &middot; Upload</p>
+      <h2 class="stage-title">One PDF can hold more than one report</h2>
+      <p class="stage-caption">The DC uploads a single file. Before anything is read, PIMS checks how many pages it has and whether it looks like more than one distinct report has been scanned into the same PDF &mdash; this one has two.</p>
+
+      <div class="file-summary">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.5"/><path d="M14 2v4h4" stroke="currentColor" stroke-width="1.5"/></svg>
+        <div>
+          <b id="fileSummaryName">sample_report_bundle.pdf</b>
+          <span>2 pages &middot; 480 KB &middot; uploaded just now</span>
+        </div>
+      </div>
+
+      <div class="pages-row">
+        <div class="page-block">
+          <div class="page-thumb">
+            <div class="ph-header"></div>
+            <div class="ph-line"></div><div class="ph-line short"></div>
+            <div class="ph-table">
+              <div class="ph-row"></div><div class="ph-row"></div><div class="ph-row"></div><div class="ph-row"></div><div class="ph-row"></div>
+            </div>
+          </div>
+          <span class="page-label">Page 1</span>
+          <span class="page-sub">Looks like a CBC report</span>
+        </div>
+        <div class="bundle-arrow">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="page-block">
+          <div class="page-thumb">
+            <div class="ph-header"></div>
+            <div class="ph-line"></div><div class="ph-line short"></div>
+            <div class="ph-table">
+              <div class="ph-row"></div><div class="ph-row"></div><div class="ph-row"></div><div class="ph-row"></div>
+            </div>
+          </div>
+          <span class="page-label">Page 2</span>
+          <span class="page-sub">Looks like a Lipid Profile</span>
+        </div>
+      </div>
+
+      <div class="stage-nav">
+        <span class="stage-progress">1 / 4</span>
+        <div style="display:flex; gap:0.6rem;">
+          <button class="btn" type="button" data-prev disabled>Back</button>
+          <button class="btn btn-primary" type="button" data-next>Next: Text extraction</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 2 -->
+    <section class="stage" data-stage="1">
+      <p class="stage-kicker">Step 2 of 4 &middot; Text extraction (OCR)</p>
+      <h2 class="stage-title">OCR reads every character &mdash; it doesn't understand any of it yet</h2>
+      <p class="stage-caption">The OCR engine scans the page and converts pixels into plain text, in reading order. At this point the system has no idea which word is a test name, which is a number, or which is a unit &mdash; it's just a wall of text.</p>
+
+      <div class="ocr-grid">
+        <div class="doc-mock" id="docMock">
+          <div class="scan-bar"></div>
+          <div class="ph-header"></div>
+          <div class="ph-line w70"></div>
+          <div class="ph-line w40"></div>
+          <div class="ph-table">
+            <div class="ph-row"><div class="c" style="width:38%"></div><div class="c" style="width:16%"></div><div class="c" style="width:14%"></div><div class="c" style="width:20%"></div></div>
+            <div class="ph-row"><div class="c" style="width:32%"></div><div class="c" style="width:20%"></div><div class="c" style="width:12%"></div><div class="c" style="width:22%"></div></div>
+            <div class="ph-row"><div class="c" style="width:36%"></div><div class="c" style="width:14%"></div><div class="c" style="width:18%"></div><div class="c" style="width:16%"></div></div>
+            <div class="ph-row"><div class="c" style="width:42%"></div><div class="c" style="width:16%"></div><div class="c" style="width:16%"></div><div class="c" style="width:14%"></div></div>
+            <div class="ph-row"><div class="c" style="width:34%"></div><div class="c" style="width:12%"></div><div class="c" style="width:10%"></div><div class="c" style="width:12%"></div></div>
+          </div>
+        </div>
+
+        <div class="raw-box" id="rawBox">
+          <div class="rl dim">Sunrise Diagnostics — Pathology Report</div>
+          <div class="rl dim">Patient: R. Sharma&nbsp;&nbsp;Age/Sex: 34/M</div>
+          <div class="rl">Hemoglobin&nbsp;&nbsp;13.8&nbsp;&nbsp;g/dL&nbsp;&nbsp;13.0-17.0</div>
+          <div class="rl">WBC Count&nbsp;&nbsp;11,400&nbsp;&nbsp;/uL&nbsp;&nbsp;4,000-11,000</div>
+          <div class="rl">RBC Count&nbsp;&nbsp;4.6&nbsp;&nbsp;mill/uL&nbsp;&nbsp;4.5-5.9</div>
+          <div class="rl">Platelet Count&nbsp;&nbsp;1.4&nbsp;&nbsp;lakh/uL&nbsp;&nbsp;1.5-4.1</div>
+          <div class="rl">Hematocrit(PCV)&nbsp;&nbsp;41.2&nbsp;&nbsp;%&nbsp;&nbsp;40-50</div>
+        </div>
+      </div>
+      <p class="stage-caption" style="margin-top:1rem; margin-bottom:0;"><strong style="color:var(--ink);">Notice:</strong> the raw text is just one line after another &mdash; no columns, no labels. That's the input to the next step.</p>
+
+      <div class="stage-nav">
+        <span class="stage-progress">2 / 4</span>
+        <div style="display:flex; gap:0.6rem;">
+          <button class="btn" type="button" data-prev>Back</button>
+          <button class="btn btn-primary" type="button" data-next>Next: Categorization</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 3 -->
+    <section class="stage" data-stage="2">
+      <p class="stage-kicker">Step 3 of 4 &middot; Categorization (field mapping)</p>
+      <h2 class="stage-title">Now each piece of text is labeled with what it means</h2>
+      <p class="stage-caption">The system looks for patterns in the raw lines &mdash; a name, followed by a number, followed by a unit, followed by a range &mdash; and tags each piece as Test, Value, Unit or Reference range. Once a value is tagged, it can be checked against its range to see if it's Normal, High or Low.</p>
+
+      <div class="map-row">
+        <div class="map-raw">Hemoglobin  13.8  g/dL  13.0-17.0</div>
+        <div class="map-arrow">&rarr;</div>
+        <div class="map-tags">
+          <span class="tag-chip tag-test">Hemoglobin<i>Test</i></span>
+          <span class="tag-chip tag-value">13.8<i>Value</i></span>
+          <span class="tag-chip tag-neutral">g/dL<i>Unit</i></span>
+          <span class="tag-chip tag-neutral">13.0&ndash;17.0<i>Range</i></span>
+          <span class="tag-chip" style="background:var(--good-tint); color:var(--good);">Normal<i>In range</i></span>
+        </div>
+      </div>
+
+      <div class="map-row">
+        <div class="map-raw">WBC Count  11,400  /uL  4,000-11,000</div>
+        <div class="map-arrow">&rarr;</div>
+        <div class="map-tags">
+          <span class="tag-chip tag-test">WBC Count<i>Test</i></span>
+          <span class="tag-chip tag-value">11,400<i>Value</i></span>
+          <span class="tag-chip tag-neutral">/uL<i>Unit</i></span>
+          <span class="tag-chip tag-neutral">4,000&ndash;11,000<i>Range</i></span>
+          <span class="tag-chip tag-warn">&uarr; High<i>Above range</i></span>
+        </div>
+      </div>
+
+      <div class="map-row">
+        <div class="map-raw">Platelet Count  1.4  lakh/uL  1.5-4.1</div>
+        <div class="map-arrow">&rarr;</div>
+        <div class="map-tags">
+          <span class="tag-chip tag-test">Platelet Count<i>Test</i></span>
+          <span class="tag-chip tag-value">1.4<i>Value</i></span>
+          <span class="tag-chip tag-neutral">lakh/uL<i>Unit</i></span>
+          <span class="tag-chip tag-neutral">1.5&ndash;4.1<i>Range</i></span>
+          <span class="tag-chip tag-warn">88% confidence<i>Needs review</i></span>
+        </div>
+      </div>
+
+      <div class="map-legend">
+        <span><i style="background:var(--accent);"></i>Test name</span>
+        <span><i style="background:var(--good);"></i>Value</span>
+        <span><i style="background:var(--ink-faint);"></i>Unit / range</span>
+        <span><i style="background:var(--warn);"></i>Flag or low-confidence &mdash; sent for manual review</span>
+      </div>
+
+      <div class="stage-nav">
+        <span class="stage-progress">3 / 4</span>
+        <div style="display:flex; gap:0.6rem;">
+          <button class="btn" type="button" data-prev>Back</button>
+          <button class="btn btn-primary" type="button" data-next>Next: See the full result</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 4 -->
+    <section class="stage" data-stage="3">
+      <p class="stage-kicker">Step 4 of 4 &middot; Structured result</p>
+      <h2 class="stage-title">Both reports, fully tabulated and ready for QC</h2>
+      <p class="stage-caption">Every field extracted this way is scored with a confidence percentage. Anything below the review threshold is highlighted so a reviewer checks it before it's accepted &mdash; values can be corrected inline, and each report is signed off separately.</p>
+
+      <div id="resultsRoot"></div>
+
+      <div class="stage-nav">
+        <span class="stage-progress">4 / 4</span>
+        <div style="display:flex; gap:0.6rem;">
+          <button class="btn" type="button" data-prev>Back</button>
+          <button class="btn" type="button" id="restartWizard">Start over</button>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- ================= APPROACHES & PRICING ================= -->
+  <div class="section-block">
+    <p class="stage-kicker">Choosing How To Build This</p>
+    <h2 class="stage-title">Two ways to read a report</h2>
+    <p class="stage-caption">The walkthrough above shows the mechanics. Underneath, there are two fundamentally different ways to build it.</p>
+
+    <div class="family-grid">
+      <div class="family-card tone-dark">
+        <div class="family-head dark">
+          <h3>Classical OCR + Table Engines</h3>
+          <p>Tesseract &middot; AWS Textract &middot; Azure Document Intelligence &middot; Google Document AI</p>
+        </div>
+        <div class="family-body">
+          <div class="family-item"><span class="fdot"></span>Strong, purpose-built table &amp; grid detection</div>
+          <div class="family-item"><span class="fdot"></span>Reads text first, understands it in a separate step</div>
+          <div class="family-item"><span class="fdot"></span>Predictable, deterministic — same input, same output</div>
+          <div class="family-item"><span class="fdot"></span>Needs rules or a language model on top for meaning</div>
+        </div>
+      </div>
+      <div class="family-card">
+        <div class="family-head accent">
+          <h3>Direct Multimodal APIs</h3>
+          <p>Gemini &middot; GPT &middot; Claude &mdash; one model, one call</p>
+        </div>
+        <div class="family-body">
+          <div class="family-item"><span class="fdot"></span>Reads and understands the page in a single pass</div>
+          <div class="family-item"><span class="fdot"></span>Handles multi-report bundling on its own</div>
+          <div class="family-item"><span class="fdot"></span>Fastest to build &mdash; describe the JSON shape, done</div>
+          <div class="family-item"><span class="fdot"></span>Cost varies a lot by provider — see below</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-block">
+    <p class="stage-kicker">Reading Cost, On Its Own</p>
+    <h2 class="stage-title">Plain OCR pricing — per page</h2>
+    <p class="stage-caption">Just the "read the characters" step, with no table/form understanding — the raw ingredient underneath every classical-OCR approach above. Shown per page, not per month, since cost at this stage barely matters until volume is real.</p>
+
+    <div class="table-scroll cost-table-wrap">
+      <table>
+        <thead>
+          <tr><th>Provider</th><th>Price per page (INR)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>AWS Textract (plain OCR)</td><td class="mono">~₹0.12</td></tr>
+          <tr><td>Azure Document Intelligence (Read)</td><td class="mono">~₹0.12</td></tr>
+          <tr><td>Google Document AI (Document OCR)</td><td class="mono">~₹0.12</td></tr>
+          <tr><td>Tesseract</td><td class="mono">₹0 (free software)</td></tr>
+          <tr><td>Zoho (Zia OCR)</td><td class="mono">Not published — credit-based</td></tr>
+          <tr><td>OCR.space</td><td class="mono">Free up to 500 req/day; flat plans beyond that</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="cost-note">The three major cloud providers all land on the exact same rate — not a coincidence, just the going market price for plain text recognition. <strong>This is only the reading step</strong> — it still hands back unstructured text with no idea which word is a test name vs. a value (see the categorization step above); the table/row-reconstruction work on top is where the real engineering cost lives, not here.</p>
+  </div>
+
+  <div class="section-block">
+    <p class="stage-kicker">Cost</p>
+    <h2 class="stage-title">Cost across every approach</h2>
+    <p class="stage-caption">Rough monthly estimate at 150,000 documents/month (5,000/day), verified against each provider's official pricing page.</p>
+
+    <div class="table-scroll cost-table-wrap">
+      <table>
+        <thead>
+          <tr><th>Approach</th><th>Extraction cost</th><th>Categorization cost</th><th>Infra / GPU</th><th>Effort</th><th>Rough total/mo</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Tesseract + rules (no AI)</td><td class="mono">₹0 (free)</td><td class="mono">₹0 (free)</td><td>Low (CPU only)</td><td>Low to build, high to maintain</td><td class="mono">~₹15–30k</td></tr>
+          <tr><td>Paid OCR + rules (no AI)</td><td class="mono">~₹37,500</td><td class="mono">₹0</td><td>None</td><td>Low–Medium</td><td class="mono">~₹37,500</td></tr>
+          <tr class="best-row"><td>Paid OCR + cloud LLM (ambiguous only)<span class="best-badge">Best value</span></td><td class="mono">~₹37,500</td><td class="mono">~₹8–12k</td><td>None</td><td>Low</td><td class="mono">~₹45–50k</td></tr>
+          <tr class="best-row"><td>Direct API — Gemini (Flash-Lite → Flash)<span class="best-badge">Best value</span></td><td class="mono">—</td><td class="mono">—</td><td>None</td><td>Very low</td><td class="mono">~₹4.5k–40k</td></tr>
+          <tr><td>Direct API — GPT (4o-mini → GPT-5)</td><td class="mono">—</td><td class="mono">—</td><td>None</td><td>Very low</td><td class="mono">~₹10k–1.3 lakh</td></tr>
+          <tr><td>Direct API — Claude (Haiku → Sonnet)</td><td class="mono">—</td><td class="mono">—</td><td>None</td><td>Very low</td><td class="mono">~₹1.1–2.2 lakh</td></tr>
+          <tr><td>Tesseract + self-hosted LLM</td><td class="mono">₹0 (~₹15–30k infra)</td><td>GPU rental</td><td>₹1–3 lakh</td><td>Medium–High</td><td class="mono">~₹1.2–3.3 lakh</td></tr>
+          <tr><td>Paid OCR + self-hosted LLM</td><td class="mono">~₹37,500</td><td>GPU rental</td><td>₹1–3 lakh</td><td>Medium–High</td><td class="mono">~₹1.4–3.4 lakh</td></tr>
+          <tr><td>Self-hosted VLM (one model)</td><td class="mono">₹0</td><td>(same model)</td><td>₹1.5–4 lakh</td><td>High</td><td class="mono">~₹1.5–4 lakh</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="cost-note">Ranges span each provider's cheapest to mid-tier model. Batch APIs (all three providers) cut every number roughly in half. <strong>Gemini's flat 258-token page cost</strong> vs. <strong>GPT's ~1,100</strong> and <strong>Claude's 1,500–3,000</strong> explains most of the gap above — not model intelligence. "Free" self-hosted options aren't automatically cheaper either: GPU hosting usually outweighs the API fees they avoid at this volume.</p>
+    <p class="pricing-date">Sources: ai.google.dev/gemini-api/docs/pricing &middot; developers.openai.com/api/docs/pricing &middot; claude.com/pricing — checked September 2026. Verify current rates before committing; prices change often.</p>
+  </div>
+
+  <div class="section-block">
+    <p class="stage-kicker">Our Take</p>
+    <h2 class="stage-title">Recommended approach</h2>
+    <p class="stage-caption">A layered strategy — right engine for the right job, humans as the safety net.</p>
+
+    <div class="rec-list">
+      <div class="rec-item">
+        <span class="rec-num">1</span>
+        <div>
+          <h4>Paid OCR (Textract / Document Intelligence) for raw reading + table structure</h4>
+          <p>Cheap, purpose-built, deterministic — this does the heavy lifting of reading tables accurately.</p>
+        </div>
+      </div>
+      <div class="rec-item">
+        <span class="rec-num">2</span>
+        <div>
+          <h4>A cloud LLM call only for semantic field-name normalization</h4>
+          <p>Used narrowly to resolve header/synonym variance ("Hb" vs "Hemoglobin") — not to re-read numeric values.</p>
+        </div>
+      </div>
+      <div class="rec-item">
+        <span class="rec-num">3</span>
+        <div>
+          <h4>Human-in-the-loop review as the permanent safety net</h4>
+          <p>Low-confidence fields are always confirmed by a reviewer before becoming canonical data — no full automation on day one.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  var SAMPLE_SEGMENTS = [
+    {
+      type: "Complete Blood Count (CBC)",
+      source: "Sunrise Diagnostics — page 1",
+      rows: [
+        ["Hemoglobin", "13.8", "g/dL", "13.0 – 17.0", "normal", 98],
+        ["WBC Count", "11,400", "/µL", "4,000 – 11,000", "high", 96],
+        ["RBC Count", "4.6", "mill/µL", "4.5 – 5.9", "normal", 97],
+        ["Platelet Count", "1.4", "lakh/µL", "1.5 – 4.1", "low", 88],
+        ["Hematocrit (PCV)", "41.2", "%", "40 – 50", "normal", 99]
+      ]
+    },
+    {
+      type: "Lipid Profile",
+      source: "Sunrise Diagnostics — page 2",
+      rows: [
+        ["Total Cholesterol", "228", "mg/dL", "< 200", "high", 94],
+        ["HDL Cholesterol", "38", "mg/dL", "> 40", "low", 91],
+        ["LDL Cholesterol", "151", "mg/dL", "< 100", "high", 82],
+        ["Triglycerides", "176", "mg/dL", "< 150", "high", 97]
+      ]
+    }
+  ];
+
+  var fileInput = document.getElementById('fileInput');
+  var dropZone = document.getElementById('dropZone');
+  var runSample = document.getElementById('runSample');
+  var fileChip = document.getElementById('fileChip');
+  var fileSummaryName = document.getElementById('fileSummaryName');
+  var wizardNav = document.getElementById('wizardNav');
+  var stages = Array.prototype.slice.call(document.querySelectorAll('.stage'));
+  var navSteps = Array.prototype.slice.call(document.querySelectorAll('.wizard-step'));
+  var docMock = document.getElementById('docMock');
+  var rawBox = document.getElementById('rawBox');
+  var resultsRoot = document.getElementById('resultsRoot');
+
+  var current = 0;
+
+  function goTo(step){
+    current = Math.max(0, Math.min(stages.length - 1, step));
+    stages.forEach(function(s){ s.classList.toggle('active', Number(s.dataset.stage) === current); });
+    navSteps.forEach(function(n, i){
+      n.classList.toggle('current', i === current);
+      n.classList.toggle('past', i < current);
+    });
+    if (current === 1) playOcrStage();
+    if (current === 3) renderResults(SAMPLE_SEGMENTS);
+  }
+
+  function playOcrStage(){
+    docMock.classList.remove('scanning');
+    rawBox.classList.remove('revealed');
+    var lines = rawBox.querySelectorAll('.rl');
+    lines.forEach(function(l, i){ l.style.animationDelay = (i * 0.12) + 's'; });
+    // Restart animations reliably by forcing reflow before re-adding classes.
+    void docMock.offsetWidth;
+    docMock.classList.add('scanning');
+    setTimeout(function(){ rawBox.classList.add('revealed'); }, 250);
+  }
+
+  navSteps.forEach(function(n){
+    n.addEventListener('click', function(){ goTo(Number(n.dataset.step)); });
+  });
+  document.querySelectorAll('[data-next]').forEach(function(b){
+    b.addEventListener('click', function(){ goTo(current + 1); });
+  });
+  document.querySelectorAll('[data-prev]').forEach(function(b){
+    b.addEventListener('click', function(){ goTo(current - 1); });
+  });
+  document.getElementById('restartWizard').addEventListener('click', function(){ goTo(0); });
+
+  function startWalkthrough(fileName){
+    fileChip.textContent = fileName;
+    fileSummaryName.textContent = fileName;
+    goTo(0);
+  }
+
+  runSample.addEventListener('click', function(){ startWalkthrough('sample_report_bundle.pdf'); });
+  fileInput.addEventListener('change', function(){
+    var f = fileInput.files && fileInput.files[0];
+    if (!f) return;
+    // No OCR engine runs in this build — a real file just replays the same
+    // walkthrough so viewers see the intended end-to-end flow.
+    startWalkthrough(f.name);
+  });
+  dropZone.addEventListener('keydown', function(e){
+    if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); fileInput.click(); }
+  });
+
+  function renderResults(segments){
+    resultsRoot.innerHTML = '';
+
+    var totalFields = 0, flagged = 0, confSum = 0;
+    segments.forEach(function(seg){
+      seg.rows.forEach(function(r){
+        totalFields++;
+        confSum += r[5];
+        if (r[5] < 92 || r[4] !== 'normal') flagged++;
+      });
+    });
+    var avgConf = totalFields ? Math.round(confSum / totalFields) : 0;
+
+    var summary = document.createElement('div');
+    summary.className = 'summary';
+    summary.innerHTML =
+      '<div><div class="num">' + segments.length + '</div><div class="lbl">Reports detected in file</div></div>' +
+      '<div><div class="num">' + totalFields + '</div><div class="lbl">Fields extracted</div></div>' +
+      '<div><div class="num flagged">' + flagged + '</div><div class="lbl">Flagged for review</div></div>' +
+      '<div><div class="num">' + avgConf + '%</div><div class="lbl">Average OCR confidence</div></div>';
+    resultsRoot.appendChild(summary);
+
+    segments.forEach(function(seg, si){
+      var card = document.createElement('section');
+      card.className = 'card segment';
+
+      var head = document.createElement('div');
+      head.className = 'seg-head';
+      var segFlagged = seg.rows.filter(function(r){ return r[5] < 92 || r[4] !== 'normal'; }).length;
+      head.innerHTML =
+        '<div><h3>' + seg.type + '</h3><div class="seg-meta">' + seg.source + '</div></div>' +
+        '<div>' + (segFlagged ? '<span class="pill pill-warn">' + segFlagged + ' to review</span>' : '<span class="pill pill-good">All in range</span>') + '</div>';
+      card.appendChild(head);
+
+      var tableScroll = document.createElement('div');
+      tableScroll.className = 'table-scroll';
+      var table = document.createElement('table');
+      table.innerHTML = '<thead><tr><th>Test</th><th>Result</th><th>Unit</th><th>Reference range</th><th>Flag</th><th>OCR confidence</th></tr></thead>';
+      var tbody = document.createElement('tbody');
+
+      seg.rows.forEach(function(r, ri){
+        var tr = document.createElement('tr');
+        var needsReview = r[5] < 92;
+        if (needsReview) tr.className = 'needs-review';
+        var confClass = r[5] >= 95 ? 'conf-high' : (r[5] >= 88 ? 'conf-mid' : 'conf-low');
+        var flagHtml = r[4] === 'normal'
+          ? '<span class="flag flag-normal">Normal</span>'
+          : (r[4] === 'high' ? '<span class="flag flag-high">&uarr; High</span>' : '<span class="flag flag-low">&darr; Low</span>');
+
+        tr.innerHTML =
+          '<td class="test-name">' + r[0] + '</td>' +
+          '<td><div class="value-cell">' +
+            '<input class="value-input mono" value="' + r[1] + '" data-seg="' + si + '" data-row="' + ri + '" aria-label="' + r[0] + ' result, editable">' +
+            '<span class="source-tag" data-tag="' + si + '-' + ri + '">OCR</span>' +
+          '</div></td>' +
+          '<td class="mono">' + r[2] + '</td>' +
+          '<td class="mono">' + r[3] + '</td>' +
+          '<td>' + flagHtml + '</td>' +
+          '<td><span class="conf ' + confClass + '"><span class="conf-dot"></span>' + r[5] + '%' + (needsReview ? ' · review' : '') + '</span></td>';
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      tableScroll.appendChild(table);
+      card.appendChild(tableScroll);
+
+      var foot = document.createElement('div');
+      foot.className = 'seg-foot';
+      foot.innerHTML =
+        '<span class="seg-foot-note">Corrections are logged; original OCR value is retained for audit.</span>' +
+        '<div style="display:flex; gap:0.6rem; align-items:center;">' +
+          '<span class="pill pill-good reviewed-badge" id="reviewed-' + si + '">&#10003; Reviewed</span>' +
+          '<button class="btn" type="button" data-mark="' + si + '">Mark segment reviewed</button>' +
+        '</div>';
+      card.appendChild(foot);
+
+      resultsRoot.appendChild(card);
+    });
+
+    resultsRoot.querySelectorAll('.value-input').forEach(function(inp){
+      var original = inp.value;
+      inp.addEventListener('input', function(){
+        var tag = resultsRoot.querySelector('[data-tag="' + inp.dataset.seg + '-' + inp.dataset.row + '"]');
+        var tr = inp.closest('tr');
+        if (inp.value !== original){
+          tag.textContent = 'Corrected'; tag.classList.add('corrected'); tr.classList.remove('needs-review');
+        } else {
+          tag.textContent = 'OCR'; tag.classList.remove('corrected');
+        }
+      });
+    });
+
+    resultsRoot.querySelectorAll('[data-mark]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var i = btn.dataset.mark;
+        document.getElementById('reviewed-' + i).classList.add('on');
+        btn.textContent = 'Reviewed';
+        btn.disabled = true;
+      });
+    });
+  }
+
+  goTo(0);
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,18 @@
+# Tested and confirmed working: Python 3.12 (Windows), paddlepaddle 3.3.1,
+# paddleocr 3.7.0, paddlex 3.7.2. Versions pinned to what was actually
+# verified end-to-end — bump deliberately, not automatically.
+#
+# IMPORTANT: paddlepaddle has no wheel for Python 3.14 (only 3.9-3.13 as of
+# this writing) — use a 3.10-3.12 interpreter for this venv, not whatever
+# `python` resolves to by default if that's newer.
+flask==3.1.3
+paddlepaddle==3.3.1
+paddleocr==3.7.0
+# paddleocr's PPStructureV3 pipeline needs this extra explicitly — installing
+# plain `paddleocr` alone raises a DependencyError at runtime, not at install
+# time, so it's easy to miss.
+paddlex[ocr]==3.7.2
+pillow
+beautifulsoup4==4.15.0
+pymupdf==1.28.2
+numpy

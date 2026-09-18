@@ -1,0 +1,16 @@
+{
+  "name": "pims-ocr-azure-llm-demo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Azure Document Intelligence (OCR/tables) + a small self-hosted LLM via Ollama (categorization) — proof of concept.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.22.2",
+    "multer": "^2.0.0",
+    "pdf-parse": "^2.4.5"
+  }
+}
