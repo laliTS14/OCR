@@ -217,24 +217,20 @@ GPU-era idea, not a near-term one.
 
 ## Repo structure
 
-Two separate git repos are involved, mirroring the existing
-`backend/`/`frontend/` pattern in this codebase (each of those already
-has its own nested `.git`, independent of the root repo):
+This folder (`OCR/`) is its **own standalone git repo**
+(`github.com/laliTS14/OCR`, private) — `git init` was run directly
+inside `OCR/`, with `origin` pointing at that GitHub repo. This is the
+**only** place OCR work is committed.
 
-1. **`alphonsol-PIMS`** (root repo, `github.com/laliTS14/alphonsol-PIMS`)
-   — still tracks a copy of everything under `OCR/` (same dual-tracking
-   pattern as `backend/`/`frontend/`). Today's PaddleOCR fixes were
-   committed and pushed here.
-2. **`OCR`** (this folder's own repo, `github.com/laliTS14/OCR`, private)
-   — created so this folder can be maintained as a fully standalone
-   project. `git init` was run directly inside `OCR/`, with `origin`
-   pointing at the new GitHub repo. **This is the actively-maintained
-   copy going forward.**
-
-**Implication:** a change to a file under `OCR/` should, in principle,
-be committed to both repos to avoid drift — the root repo does not
-auto-sync from this one or vice versa. In practice, prioritize keeping
-this (`OCR`) repo current; the root repo's copy is secondary.
+The parent `alphonsol-PIMS` repo initially also tracked a copy of
+everything under `OCR/` (mirroring how `backend/`/`frontend/` are still
+dual-tracked there today) — that's been deliberately undone:
+`OCR/` was untracked from the root repo (`git rm -r --cached`, files
+left on disk) and added to the root `.gitignore`. The root repo's git
+*history* still has old snapshots of `OCR/` files from before this
+change, but nothing new here will show up there going forward, and nothing
+needs to be committed there — **only commit and push from inside `OCR/`
+itself.**
 
 ## Open issues (not yet resolved)
 
