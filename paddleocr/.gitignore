@@ -3,3 +3,9 @@ node_modules/
 __pycache__/
 *.pyc
 .venv/
+
+# Per-transaction pipeline logs (real patient data — never commit)
+logs/
+
+# Per-page OCR cache (real patient data — never commit)
+ocr-cache/

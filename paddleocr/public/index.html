@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PaddleOCR Extraction (Self-Hosted, Free)</title>
+<title>PIMS Report Extraction</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
   :root{
     --bg:#f7f9fc; --paper:#ffffff; --sunken:#eef2f8; --border:#dde5f0;
     --ink:#16233d; --ink-muted:#5c6b84; --ink-faint:#8b98ad;
-    --accent:#1b7a8c; --accent-ink:#ffffff; --accent-tint:#e4f2f4;
+    --accent:#a3521f; --accent-ink:#ffffff; --accent-tint:#f5e8dc;
     --good:#1f8a5f; --good-tint:#e5f4ec; --warn:#b8791e; --warn-tint:#faf0dd;
     --crit:#b23a3a; --crit-tint:#f9e7e7;
     --shadow: 0 1px 2px rgba(22,35,61,0.04), 0 8px 24px -12px rgba(22,35,61,0.12);
@@ -23,12 +23,6 @@
   .eyebrow{ font-size:0.72rem; font-weight:600; letter-spacing:0.09em; text-transform:uppercase; color:var(--accent); margin:0 0 0.6rem; }
   h1{ font-family:"Fraunces", Georgia, serif; font-weight:600; font-size:2rem; letter-spacing:-0.01em; margin:0 0 0.55rem; text-wrap:balance; }
   .lede{ color:var(--ink-muted); font-size:1rem; line-height:1.55; max-width:66ch; margin:0 0 1.6rem; }
-
-  .demo-note{ display:flex; gap:0.6rem; align-items:flex-start; background:var(--sunken); border:1px solid var(--border); border-radius:var(--radius); padding:0.8rem 1rem; font-size:0.87rem; color:var(--ink-muted); margin-bottom:2rem; }
-  .demo-note strong{ color:var(--ink); }
-  .demo-note svg{ flex:none; margin-top:0.15rem; color:var(--accent); }
-  .demo-note.warn{ background:var(--warn-tint); }
-  .demo-note.warn svg{ color:var(--warn); }
 
   .pipeline-strip{ display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; font-size:0.82rem; color:var(--ink-muted); margin-bottom:1.6rem; }
   .pipeline-strip .stage{ display:inline-flex; align-items:center; gap:0.4rem; background:var(--sunken); border:1px solid var(--border); border-radius:99px; padding:0.35rem 0.75rem; }
@@ -91,8 +85,8 @@
   .empty-state{ text-align:center; padding:3rem 1rem; color:var(--ink-faint); font-size:0.9rem; }
 
   /* ---------- Step-by-step stage viewer ---------- */
-  .stage-nav{ display:grid; grid-template-columns:repeat(4,1fr); gap:0; position:relative; margin:1.6rem 0; }
-  .stage-nav::before{ content:""; position:absolute; top:17px; left:calc(12.5% + 4px); right:calc(12.5% + 4px); height:2px; background:var(--border); z-index:0; }
+  .stage-nav{ display:grid; grid-template-columns:repeat(5,1fr); gap:0; position:relative; margin:1.6rem 0; }
+  .stage-nav::before{ content:""; position:absolute; top:17px; left:calc(10% + 4px); right:calc(10% + 4px); height:2px; background:var(--border); z-index:0; }
   .stage-btn{ position:relative; z-index:1; display:flex; flex-direction:column; align-items:center; gap:0.4rem; background:none; border:none; cursor:pointer; font-family:inherit; padding:0.2rem; }
   .stage-btn .dot{ width:34px; height:34px; border-radius:50%; background:var(--paper); border:2px solid var(--border); display:flex; align-items:center; justify-content:center; font-family:"IBM Plex Mono", monospace; font-size:0.85rem; font-weight:600; color:var(--ink-faint); }
   .stage-btn .lbl{ font-size:0.72rem; font-weight:600; color:var(--ink-faint); text-align:center; }
@@ -107,10 +101,11 @@
   .stage-panel.active{ display:block; }
   .stage-panel-head{ font-size:0.78rem; color:var(--ink-muted); margin-bottom:0.8rem; }
   .stage-panel-head b{ color:var(--ink); }
-  .raw-dump{ background:var(--ink); color:#cfe7f0; font-family:"IBM Plex Mono", monospace; font-size:0.78rem; line-height:1.6; padding:1rem 1.2rem; border-radius:var(--radius); max-height:420px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
+  .raw-dump{ background:var(--ink); color:#f0dcc4; font-family:"IBM Plex Mono", monospace; font-size:0.78rem; line-height:1.6; padding:1rem 1.2rem; border-radius:var(--radius); max-height:420px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
   .json-dump{ background:var(--sunken); border:1px solid var(--border); font-family:"IBM Plex Mono", monospace; font-size:0.78rem; line-height:1.6; padding:1rem 1.2rem; border-radius:var(--radius); max-height:420px; overflow:auto; white-space:pre-wrap; color:var(--ink); }
-  .pill-flat{ display:inline-flex; align-items:center; gap:0.35rem; font-size:0.74rem; font-weight:600; padding:0.25rem 0.6rem; border-radius:99px; background:var(--sunken); border:1px solid var(--border); color:var(--ink-muted); margin-bottom:1rem; }
+  .pill-flat{ display:inline-flex; align-items:center; gap:0.35rem; font-size:0.74rem; font-weight:600; padding:0.25rem 0.6rem; border-radius:99px; background:var(--sunken); border:1px solid var(--border); color:var(--ink-muted); margin-bottom:1rem; margin-right:0.4rem; }
   .pill-flat.good{ background:var(--good-tint); color:var(--good); border-color:transparent; }
+  .pill-flat.warn{ background:var(--warn-tint); color:var(--warn); border-color:transparent; }
 
   tbody tr.row-high, tbody tr.row-low{ background:var(--warn-tint); }
   tbody tr.row-unchecked{ background:var(--sunken); }
@@ -118,28 +113,32 @@
   .vstatus.high, .vstatus.low{ color:var(--warn); }
   .vstatus.normal{ color:var(--good); }
   .vstatus.unchecked{ color:var(--ink-faint); font-style:italic; }
+
+  .section-list{ display:flex; flex-direction:column; gap:0.6rem; margin:1rem 0 1.2rem; }
+  .section-option{ display:flex; align-items:center; gap:0.7rem; padding:0.75rem 1rem; border:1px solid var(--border); border-radius:8px; cursor:pointer; background:var(--paper); transition:border-color .15s ease; }
+  .section-option:hover{ border-color:var(--accent); }
+  .section-option input{ accent-color:var(--accent); flex:none; }
+  .section-option .s-name{ font-weight:600; font-size:0.92rem; }
+  .section-option .s-pages{ font-size:0.76rem; color:var(--ink-faint); margin-left:auto; font-family:"IBM Plex Mono", monospace; white-space:nowrap; }
 </style>
 </head>
 <body>
 
 <div class="wrap">
-  <p class="eyebrow">PIMS &middot; PaddleOCR Extraction Proof of Concept</p>
-  <h1>Free extraction: PaddleOCR + a small local model</h1>
-  <p class="lede">Upload an actual diagnostic report. Digital PDFs skip OCR entirely (their text is read directly, for free); scans go through a self-hosted PaddleOCR + PP-Structure service running on your own machine &mdash; no cloud OCR bill. A small local model (via Ollama) does the categorization, and code &mdash; not AI &mdash; validates the results.</p>
+  <p class="eyebrow">PIMS &middot; <a href="/select.html" style="color:var(--accent); text-decoration:none;">Faster flow: choose report types first &rarr;</a></p>
+  <h1>Diagnostic Report Extraction</h1>
+  <p class="lede">Upload a diagnostic report, pick which report section to extract, and see it processed step by step.</p>
 
   <div class="pipeline-strip">
-    <span class="stage"><b>1. Triage</b> (digital or scan?)</span>
+    <span class="stage"><b>1. Triage</b></span>
     <span class="arrow">&rarr;</span>
-    <span class="stage"><b>2. Read</b> (free text layer, or PaddleOCR)</span>
+    <span class="stage"><b>2. Read</b></span>
     <span class="arrow">&rarr;</span>
-    <span class="stage"><b>3. Categorize</b> (local LLM)</span>
+    <span class="stage"><b>3. Select report</b></span>
     <span class="arrow">&rarr;</span>
-    <span class="stage"><b>4. Validate</b> (deterministic code)</span>
-  </div>
-
-  <div class="demo-note warn">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.5 1 14h14L8 1.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 6.5v3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="12" r="0.9" fill="currentColor"/></svg>
-    <div><strong>Proof of concept, not production.</strong> Both the OCR engine (PaddleOCR) and the categorization model are free/self-hosted, chosen for a modest accuracy bar (~60&ndash;70%), not for best-in-class results &mdash; expect more misses on messy scans, regional-language text, or unusual layouts than the Azure/Gemini POCs in this repo. Validation only catches numeric out-of-range values and missing fields; every field should still be reviewed by a person before use.</div>
+    <span class="stage"><b>4. Categorize</b></span>
+    <span class="arrow">&rarr;</span>
+    <span class="stage"><b>5. Validate</b></span>
   </div>
 
   <div class="card upload">
@@ -156,7 +155,7 @@
 
   <div class="status" id="status">
     <span class="spinner"></span>
-    <span id="statusText">Running PaddleOCR, then the local model&hellip; this can take 20&ndash;60 seconds.</span>
+    <span id="statusText">Processing your file&hellip; this can take a long time for a multi-page scan.</span>
   </div>
 
   <div class="error-box" id="errorBox"></div>
@@ -169,8 +168,9 @@
     <div class="stage-nav" id="stageNav">
       <button class="stage-btn" data-stage="0" type="button" disabled><span class="dot">1</span><span class="lbl">Triage</span></button>
       <button class="stage-btn" data-stage="1" type="button" disabled><span class="dot">2</span><span class="lbl">Reading</span></button>
-      <button class="stage-btn" data-stage="2" type="button" disabled><span class="dot">3</span><span class="lbl">Categorized</span></button>
-      <button class="stage-btn" data-stage="3" type="button" disabled><span class="dot">4</span><span class="lbl">Validated result</span></button>
+      <button class="stage-btn" data-stage="2" type="button" disabled><span class="dot">3</span><span class="lbl">Select report</span></button>
+      <button class="stage-btn" data-stage="3" type="button" disabled><span class="dot">4</span><span class="lbl">Categorized</span></button>
+      <button class="stage-btn" data-stage="4" type="button" disabled><span class="dot">5</span><span class="lbl">Validated result</span></button>
     </div>
 
     <section class="card stage-panel" data-panel="0" style="padding:1.3rem;">
@@ -182,10 +182,14 @@
     </section>
 
     <section class="card stage-panel" data-panel="2" style="padding:1.3rem;">
+      <div id="panelSelect"></div>
+    </section>
+
+    <section class="card stage-panel" data-panel="3" style="padding:1.3rem;">
       <div id="panelCategorized"></div>
     </section>
 
-    <section class="stage-panel" data-panel="3">
+    <section class="stage-panel" data-panel="4">
       <div id="panelValidated"></div>
     </section>
   </div>
@@ -204,6 +208,7 @@
   var stageButtons = Array.prototype.slice.call(document.querySelectorAll('.stage-btn'));
   var stagePanels = Array.prototype.slice.call(document.querySelectorAll('.stage-panel'));
   var currentStage = 0;
+  var currentSessionId = null;
 
   dropZone.addEventListener('keydown', function(e){
     if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); fileInput.click(); }
@@ -213,7 +218,7 @@
     var f = fileInput.files && fileInput.files[0];
     if (!f) return;
     fileChip.textContent = f.name;
-    runExtraction(f);
+    identifyReports(f);
   });
 
   stageButtons.forEach(function(btn){
@@ -229,25 +234,106 @@
     stageButtons.forEach(function(b, i){ b.classList.toggle('current', i === n); });
   }
 
-  async function runExtraction(file){
+  function enableStagesUpTo(n){
+    stageButtons.forEach(function(b, i){
+      if (i <= n){ b.disabled = false; b.classList.add('done'); }
+    });
+  }
+
+  // Step 1: triage + read the whole file, then ask which report to
+  // categorize — the expensive full-document categorize() call never runs
+  // here, only the cheap per-page "what sections exist" pass (sections.js).
+  async function identifyReports(file){
     errorBox.classList.remove('show');
     emptyState.style.display = 'none';
     stageArea.style.display = 'none';
     status.classList.add('show');
-    statusText.textContent = 'Processing "' + file.name + '"… this can take 20–60 seconds.';
+    statusText.textContent = 'Reading "' + file.name + '" and finding its report sections… this can take a long time for a multi-page scan.';
+    currentSessionId = null;
+
+    stageButtons.forEach(function(b){ b.disabled = true; b.classList.remove('done', 'current'); });
+    document.getElementById('panelCategorized').innerHTML = '';
+    document.getElementById('panelValidated').innerHTML = '';
 
     var formData = new FormData();
     formData.append('file', file);
 
     try {
-      var res = await fetch('/api/extract', { method: 'POST', body: formData });
+      var res = await fetch('/api/identify-reports', { method: 'POST', body: formData });
       var payload = await res.json();
       if (!res.ok) throw new Error(payload.error || ('Request failed with status ' + res.status));
-      renderStages(payload);
+
+      currentSessionId = payload.sessionId;
+      stageArea.style.display = '';
+      renderTriagePanel(payload.stages.triage);
+      renderOcrPanel(payload.stages.ocr, payload.stages.triage);
+      renderSelectPanel(payload.sections || []);
+      enableStagesUpTo(2);
+      goToStage(2);
     } catch (err) {
-      errorBox.textContent = 'Extraction failed: ' + err.message;
+      errorBox.textContent = 'Could not read this file: ' + err.message;
       errorBox.classList.add('show');
       emptyState.style.display = '';
+    } finally {
+      status.classList.remove('show');
+    }
+  }
+
+  function renderSelectPanel(sections){
+    var el = document.getElementById('panelSelect');
+    var head = '<h3 style="font-family:\'Fraunces\',Georgia,serif; font-size:1.05rem; margin:0 0 0.6rem;">Stage 3 — Select a report</h3>';
+
+    if (!sections.length){
+      el.innerHTML = head + '<div class="empty-state">No distinct report sections were detected in this file — nothing to pick from.</div>';
+      return;
+    }
+
+    var html = head +
+      '<div class="stage-panel-head">This file has <b>' + sections.length + '</b> report section(s). Pick one — only its page(s) are sent to the local model, not the whole document.</div>' +
+      '<div class="section-list" id="sectionList">';
+    sections.forEach(function(s, i){
+      var pageWord = s.pageNumbers.length > 1 ? 'Pages' : 'Page';
+      html += '<label class="section-option">' +
+        '<input type="radio" name="section" value="' + escapeHtml(s.id) + '"' + (i === 0 ? ' checked' : '') + '>' +
+        '<span class="s-name">' + escapeHtml(s.name) + '</span>' +
+        '<span class="s-pages">' + pageWord + ' ' + s.pageNumbers.join(', ') + '</span>' +
+        '</label>';
+    });
+    html += '</div><button class="btn btn-primary" id="categorizeBtn" type="button">Categorize selected report</button>';
+    el.innerHTML = html;
+
+    document.getElementById('categorizeBtn').addEventListener('click', function(){
+      var checked = el.querySelector('input[name="section"]:checked');
+      if (!checked) return;
+      var section = sections.filter(function(s){ return s.id === checked.value; })[0];
+      if (section) categorizeSelected(section);
+    });
+  }
+
+  // Step 2: categorize ONLY the page(s) behind the chosen section id — the
+  // session (from step 1) already has them cached server-side.
+  async function categorizeSelected(section){
+    if (!currentSessionId) return;
+    errorBox.classList.remove('show');
+    status.classList.add('show');
+    statusText.textContent = 'Categorizing "' + section.name + '"…';
+
+    try {
+      var res = await fetch('/api/categorize-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: currentSessionId, sectionId: section.id }),
+      });
+      var payload = await res.json();
+      if (!res.ok) throw new Error(payload.error || ('Request failed with status ' + res.status));
+
+      renderCategorizedPanel(payload.stages.categorized);
+      renderValidatedPanel(payload.stages.validated, payload);
+      enableStagesUpTo(4);
+      goToStage(4);
+    } catch (err) {
+      errorBox.textContent = 'Categorization failed: ' + err.message;
+      errorBox.classList.add('show');
     } finally {
       status.classList.remove('show');
     }
@@ -259,31 +345,16 @@
       (hasValue ? escapeHtml(value) : 'Not found') + '</div></div>';
   }
 
-  function renderStages(payload){
-    var stages = payload.stages || {};
-    stageArea.style.display = '';
-    stageButtons.forEach(function(b){ b.disabled = false; b.classList.add('done'); });
-
-    renderTriagePanel(stages.triage);
-    renderOcrPanel(stages.ocr, stages.triage);
-    renderCategorizedPanel(stages.categorized);
-    renderValidatedPanel(stages.validated, payload);
-
-    goToStage(3); // land on the final, most useful view
-  }
-
   function renderTriagePanel(triage){
     var el = document.getElementById('panelTriage');
     if (!triage) { el.innerHTML = '<div class="empty-state">No triage data.</div>'; return; }
     el.innerHTML =
-      '<h3 style="font-family:\'Fraunces\',Georgia,serif; font-size:1.05rem; margin:0 0 0.9rem;">Stage 1 — What kind of file is this?</h3>' +
-      '<span class="pill-flat ' + (triage.isDigital ? 'good' : '') + '">' + (triage.isDigital ? 'Digital PDF — has a real text layer' : 'Scan / image — needs OCR') + '</span>' +
-      '<div class="field-grid" style="margin-bottom:1rem;">' +
+      '<h3 style="font-family:\'Fraunces\',Georgia,serif; font-size:1.05rem; margin:0 0 0.9rem;">Stage 1 — Triage</h3>' +
+      '<span class="pill-flat ' + (triage.isDigital ? 'good' : '') + '">' + (triage.isDigital ? 'Readable text found' : 'Scan detected') + '</span>' +
+      '<div class="field-grid">' +
         fieldHtml('File', triage.fileName) +
         fieldHtml('Size', triage.fileSizeKb + ' KB') +
-        fieldHtml('Reading engine chosen', triage.engine) +
-      '</div>' +
-      '<p style="font-size:0.85rem; color:var(--ink-muted); margin:0;">' + escapeHtml(triage.reason) + '</p>';
+      '</div>';
   }
 
   function renderOcrPanel(ocr, triage){
@@ -291,22 +362,19 @@
     if (!ocr) { el.innerHTML = '<div class="empty-state">No reading output.</div>'; return; }
     var isDigital = triage && triage.isDigital;
     el.innerHTML =
-      '<h3 style="font-family:\'Fraunces\',Georgia,serif; font-size:1.05rem; margin:0 0 0.6rem;">Stage 2 — Raw output of the reading step</h3>' +
+      '<h3 style="font-family:\'Fraunces\',Georgia,serif; font-size:1.05rem; margin:0 0 0.6rem;">Stage 2 — Reading</h3>' +
       '<div class="stage-panel-head">' +
-        (isDigital
-          ? 'Pulled directly from the PDF\'s text layer — <b>no OCR engine ran, this cost nothing.</b>'
-          : '<b>' + ocr.tableCount + ' table(s)</b> detected by PaddleOCR/PP-Structure, plus the full plain text.') +
+        (isDigital ? 'Text extracted from the file.' : '<b>' + ocr.pageCount + ' page(s)</b> read.') +
       '</div>' +
-      '<div class="raw-dump">' + escapeHtml(ocr.dump) + '</div>' +
-      '<p style="font-size:0.82rem; color:var(--ink-muted); margin:0.8rem 0 0;">This is exactly what gets handed to the local model next — nothing structured yet, notice how a plain-text digital PDF often comes out jumbled (a known trade-off of skipping OCR for digital PDFs).</p>';
+      '<div class="raw-dump">' + escapeHtml(ocr.dump) + '</div>';
   }
 
   function renderCategorizedPanel(categorized){
     var el = document.getElementById('panelCategorized');
     if (!categorized) { el.innerHTML = '<div class="empty-state">No categorized output.</div>'; return; }
     el.innerHTML =
-      '<h3 style="font-family:\'Fraunces\',Georgia,serif; font-size:1.05rem; margin:0 0 0.6rem;">Stage 3 — What the local model organized this into</h3>' +
-      '<div class="stage-panel-head">Raw JSON, before any validation is applied — this is the small model\'s unedited output.</div>' +
+      '<h3 style="font-family:\'Fraunces\',Georgia,serif; font-size:1.05rem; margin:0 0 0.6rem;">Stage 4 — Categorize</h3>' +
+      '<div class="stage-panel-head">Structured data, before validation.</div>' +
       '<div class="json-dump">' + escapeHtml(JSON.stringify(categorized, null, 2)) + '</div>';
   }
 
@@ -317,7 +385,7 @@
     var summary = (validated && validated.validationSummary) || { normal: 0, flagged: 0, unchecked: 0 };
 
     var html = '';
-    html += '<div class="meta-row">File: ' + escapeHtml(payload.fileName) + '  ·  LLM: ' + escapeHtml(payload.llmModel) + '</div>';
+    html += '<div class="meta-row">File: ' + escapeHtml(payload.fileName) + '</div>';
 
     html += '<div class="card patient-card"><h3>Patient Information</h3><div class="field-grid">' +
       fieldHtml('Name', patient.name) + fieldHtml('Age', patient.age) + fieldHtml('Sex', patient.sex) +

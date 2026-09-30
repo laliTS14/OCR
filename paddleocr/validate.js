@@ -2,7 +2,8 @@
 // self-report a confidence score. Comparing a number against a range is
 // exactly the kind of mechanical task that doesn't need AI at all. This runs
 // AFTER categorization, as a cheap first-pass filter before anything reaches
-// a human reviewer. Identical to ../azure-llm/validate.js — copied, not
+// a human reviewer. Identical to ../paddleocr/validate.js,
+// ../deepseek-ocr/validate.js, and ../azure-llm/validate.js — copied, not
 // shared, so this OCR demo stays fully standalone.
 
 function parseLeadingNumber(str) {
