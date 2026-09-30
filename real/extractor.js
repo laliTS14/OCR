@@ -65,12 +65,26 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// On a 429 quota error, Google tells us exactly how long to wait via a
+// RetryInfo entry in error.details (retryDelay, e.g. "34s") — reading
+// that instead of guessing matters here: our own exponential backoff was
+// consistently too short against real quota resets, and blindly retrying
+// on a quota error just burns more of the same limited request budget
+// instead of waiting it out. Falls back to null if Google didn't send one
+// (e.g. on a plain 503 overload, which has no quota window to report).
+function extractRetryDelayMs(details) {
+  const retryInfo = details?.error?.details?.find((d) => d['@type']?.includes('RetryInfo'));
+  const match = /^([\d.]+)s$/.exec(retryInfo?.retryDelay || '');
+  return match ? Math.ceil(parseFloat(match[1]) * 1000) : null;
+}
+
 // 429 (rate limited) and 503 (model overloaded) are both transient on
 // Google's side — retrying after a short backoff usually succeeds without
 // the caller having to manually retry. Anything else (bad key, bad
 // request, model not found) fails immediately since retrying won't help.
 const RETRYABLE_STATUS = new Set([429, 503]);
-const MAX_ATTEMPTS = 4;
+const MAX_ATTEMPTS = 6;
+const MAX_BACKOFF_MS = 16000;
 
 async function callGeminiOnce(fileBuffer, mimeType, { model, apiKey }) {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
@@ -155,8 +169,9 @@ async function callGemini(fileBuffer, mimeType, { model, apiKey }) {
     } catch (err) {
       const isLastAttempt = attempt === MAX_ATTEMPTS;
       if (!RETRYABLE_STATUS.has(err.status) || isLastAttempt) throw err;
-      const backoffMs = 1000 * 2 ** (attempt - 1); // 1s, 2s
-      console.warn(`Gemini call failed (${err.message}) — retrying in ${backoffMs}ms (attempt ${attempt}/${MAX_ATTEMPTS})`);
+      const googleRetryDelayMs = extractRetryDelayMs(err.details);
+      const backoffMs = googleRetryDelayMs ?? Math.min(1000 * 2 ** (attempt - 1), MAX_BACKOFF_MS); // 1s, 2s, 4s, 8s, 16s
+      console.warn(`Gemini call failed (${err.message}) — retrying in ${backoffMs}ms (attempt ${attempt}/${MAX_ATTEMPTS}${googleRetryDelayMs ? ', delay from Google' : ''})`);
       await sleep(backoffMs);
     }
   }

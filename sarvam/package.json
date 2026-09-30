@@ -1,0 +1,15 @@
+{
+  "name": "pims-ocr-sarvam-demo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Sarvam AI Document AI (Extract) powered extraction of DC diagnostic reports into structured JSON — proof of concept, alternative to real/ (Gemini).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "multer": "^2.0.0"
+  }
+}

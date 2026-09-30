@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Real OCR Extraction (Azure + Local LLM)</title>
+<title>PIMS Report Extraction</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
   :root{
@@ -23,12 +23,6 @@
   .eyebrow{ font-size:0.72rem; font-weight:600; letter-spacing:0.09em; text-transform:uppercase; color:var(--accent); margin:0 0 0.6rem; }
   h1{ font-family:"Fraunces", Georgia, serif; font-weight:600; font-size:2rem; letter-spacing:-0.01em; margin:0 0 0.55rem; text-wrap:balance; }
   .lede{ color:var(--ink-muted); font-size:1rem; line-height:1.55; max-width:66ch; margin:0 0 1.6rem; }
-
-  .demo-note{ display:flex; gap:0.6rem; align-items:flex-start; background:var(--sunken); border:1px solid var(--border); border-radius:var(--radius); padding:0.8rem 1rem; font-size:0.87rem; color:var(--ink-muted); margin-bottom:2rem; }
-  .demo-note strong{ color:var(--ink); }
-  .demo-note svg{ flex:none; margin-top:0.15rem; color:var(--accent); }
-  .demo-note.warn{ background:var(--warn-tint); }
-  .demo-note.warn svg{ color:var(--warn); }
 
   .pipeline-strip{ display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; font-size:0.82rem; color:var(--ink-muted); margin-bottom:1.6rem; }
   .pipeline-strip .stage{ display:inline-flex; align-items:center; gap:0.4rem; background:var(--sunken); border:1px solid var(--border); border-radius:99px; padding:0.35rem 0.75rem; }
@@ -123,23 +117,18 @@
 <body>
 
 <div class="wrap">
-  <p class="eyebrow">PIMS &middot; Real Extraction Proof of Concept</p>
-  <h1>Real extraction: OCR + a small local model</h1>
-  <p class="lede">Upload an actual diagnostic report. Digital PDFs skip OCR entirely (their text is read directly, for free); scans go through Azure Document Intelligence. Either way, a small model on your own machine (via Ollama) does the categorization, and code — not AI — validates the results.</p>
+  <p class="eyebrow">PIMS</p>
+  <h1>Diagnostic Report Extraction</h1>
+  <p class="lede">Upload a diagnostic report to see it processed step by step.</p>
 
   <div class="pipeline-strip">
-    <span class="stage"><b>1. Triage</b> (digital or scan?)</span>
+    <span class="stage"><b>1. Triage</b></span>
     <span class="arrow">&rarr;</span>
-    <span class="stage"><b>2. Read</b> (free text layer, or Azure OCR)</span>
+    <span class="stage"><b>2. Read</b></span>
     <span class="arrow">&rarr;</span>
-    <span class="stage"><b>3. Categorize</b> (local LLM)</span>
+    <span class="stage"><b>3. Categorize</b></span>
     <span class="arrow">&rarr;</span>
-    <span class="stage"><b>4. Validate</b> (deterministic code)</span>
-  </div>
-
-  <div class="demo-note warn">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.5 1 14h14L8 1.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 6.5v3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="12" r="0.9" fill="currentColor"/></svg>
-    <div><strong>Proof of concept, not production.</strong> Categorization runs on a small (~3B parameter) model — capable at organizing already-correct text, less capable than a frontier model at handling unusual phrasing. Validation only catches numeric out-of-range values and missing fields; every field should still be reviewed by a person before use.</div>
+    <span class="stage"><b>4. Validate</b></span>
   </div>
 
   <div class="card upload">
@@ -156,7 +145,7 @@
 
   <div class="status" id="status">
     <span class="spinner"></span>
-    <span id="statusText">Running Azure OCR, then the local model&hellip; this can take 20&ndash;60 seconds.</span>
+    <span id="statusText">Processing your file&hellip; this can take a few minutes.</span>
   </div>
 
   <div class="error-box" id="errorBox"></div>
@@ -234,7 +223,7 @@
     emptyState.style.display = 'none';
     stageArea.style.display = 'none';
     status.classList.add('show');
-    statusText.textContent = 'Processing "' + file.name + '"… this can take 20–60 seconds.';
+    statusText.textContent = 'Processing "' + file.name + '"… this can take a few minutes.';
 
     var formData = new FormData();
     formData.append('file', file);
@@ -276,14 +265,12 @@
     var el = document.getElementById('panelTriage');
     if (!triage) { el.innerHTML = '<div class="empty-state">No triage data.</div>'; return; }
     el.innerHTML =
-      '<h3 style="font-family:\'Fraunces\',Georgia,serif; font-size:1.05rem; margin:0 0 0.9rem;">Stage 1 — What kind of file is this?</h3>' +
-      '<span class="pill-flat ' + (triage.isDigital ? 'good' : '') + '">' + (triage.isDigital ? 'Digital PDF — has a real text layer' : 'Scan / image — needs OCR') + '</span>' +
-      '<div class="field-grid" style="margin-bottom:1rem;">' +
+      '<h3 style="font-family:\'Fraunces\',Georgia,serif; font-size:1.05rem; margin:0 0 0.9rem;">Stage 1 — Triage</h3>' +
+      '<span class="pill-flat ' + (triage.isDigital ? 'good' : '') + '">' + (triage.isDigital ? 'Readable text found' : 'Scan detected') + '</span>' +
+      '<div class="field-grid">' +
         fieldHtml('File', triage.fileName) +
         fieldHtml('Size', triage.fileSizeKb + ' KB') +
-        fieldHtml('Reading engine chosen', triage.engine) +
-      '</div>' +
-      '<p style="font-size:0.85rem; color:var(--ink-muted); margin:0;">' + escapeHtml(triage.reason) + '</p>';
+      '</div>';
   }
 
   function renderOcrPanel(ocr, triage){
@@ -291,22 +278,19 @@
     if (!ocr) { el.innerHTML = '<div class="empty-state">No reading output.</div>'; return; }
     var isDigital = triage && triage.isDigital;
     el.innerHTML =
-      '<h3 style="font-family:\'Fraunces\',Georgia,serif; font-size:1.05rem; margin:0 0 0.6rem;">Stage 2 — Raw output of the reading step</h3>' +
+      '<h3 style="font-family:\'Fraunces\',Georgia,serif; font-size:1.05rem; margin:0 0 0.6rem;">Stage 2 — Reading</h3>' +
       '<div class="stage-panel-head">' +
-        (isDigital
-          ? 'Pulled directly from the PDF\'s text layer — <b>no OCR engine ran, this cost nothing.</b>'
-          : '<b>' + ocr.tableCount + ' table(s)</b> detected by Azure Document Intelligence, plus the full plain text.') +
+        (isDigital ? 'Text extracted from the file.' : '<b>' + ocr.tableCount + ' table(s)</b> found, plus the full text.') +
       '</div>' +
-      '<div class="raw-dump">' + escapeHtml(ocr.dump) + '</div>' +
-      '<p style="font-size:0.82rem; color:var(--ink-muted); margin:0.8rem 0 0;">This is exactly what gets handed to the local model next — nothing structured yet, notice how a plain-text digital PDF often comes out jumbled (see the walkthrough demo for why).</p>';
+      '<div class="raw-dump">' + escapeHtml(ocr.dump) + '</div>';
   }
 
   function renderCategorizedPanel(categorized){
     var el = document.getElementById('panelCategorized');
     if (!categorized) { el.innerHTML = '<div class="empty-state">No categorized output.</div>'; return; }
     el.innerHTML =
-      '<h3 style="font-family:\'Fraunces\',Georgia,serif; font-size:1.05rem; margin:0 0 0.6rem;">Stage 3 — What the local model organized this into</h3>' +
-      '<div class="stage-panel-head">Raw JSON, before any validation is applied — this is the small model\'s unedited output.</div>' +
+      '<h3 style="font-family:\'Fraunces\',Georgia,serif; font-size:1.05rem; margin:0 0 0.6rem;">Stage 3 — Categorize</h3>' +
+      '<div class="stage-panel-head">Structured data, before validation.</div>' +
       '<div class="json-dump">' + escapeHtml(JSON.stringify(categorized, null, 2)) + '</div>';
   }
 
@@ -317,7 +301,7 @@
     var summary = (validated && validated.validationSummary) || { normal: 0, flagged: 0, unchecked: 0 };
 
     var html = '';
-    html += '<div class="meta-row">File: ' + escapeHtml(payload.fileName) + '  ·  LLM: ' + escapeHtml(payload.llmModel) + '</div>';
+    html += '<div class="meta-row">File: ' + escapeHtml(payload.fileName) + '</div>';
 
     html += '<div class="card patient-card"><h3>Patient Information</h3><div class="field-grid">' +
       fieldHtml('Name', patient.name) + fieldHtml('Age', patient.age) + fieldHtml('Sex', patient.sex) +

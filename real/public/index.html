@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Real OCR Extraction (Gemini)</title>
+<title>PIMS Report Extraction</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
   :root{
@@ -23,12 +23,6 @@
   .eyebrow{ font-size:0.72rem; font-weight:600; letter-spacing:0.09em; text-transform:uppercase; color:var(--accent); margin:0 0 0.6rem; }
   h1{ font-family:"Fraunces", Georgia, serif; font-weight:600; font-size:2rem; letter-spacing:-0.01em; margin:0 0 0.55rem; text-wrap:balance; }
   .lede{ color:var(--ink-muted); font-size:1rem; line-height:1.55; max-width:66ch; margin:0 0 1.6rem; }
-
-  .demo-note{ display:flex; gap:0.6rem; align-items:flex-start; background:var(--sunken); border:1px solid var(--border); border-radius:var(--radius); padding:0.8rem 1rem; font-size:0.87rem; color:var(--ink-muted); margin-bottom:2rem; }
-  .demo-note strong{ color:var(--ink); }
-  .demo-note svg{ flex:none; margin-top:0.15rem; color:var(--accent); }
-  .demo-note.warn{ background:var(--warn-tint); }
-  .demo-note.warn svg{ color:var(--warn); }
 
   .card{ background:var(--paper); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); }
 
@@ -100,14 +94,9 @@
 <body>
 
 <div class="wrap">
-  <p class="eyebrow">PIMS &middot; Real Extraction Proof of Concept</p>
-  <h1>Real OCR extraction, powered by Gemini</h1>
-  <p class="lede">Upload an actual diagnostic report. This calls the real Gemini API — no simulated data. Results (and any errors) are exactly what the model returns.</p>
-
-  <div class="demo-note warn">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.5 1 14h14L8 1.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 6.5v3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="12" r="0.9" fill="currentColor"/></svg>
-    <div><strong>Proof of concept, not production.</strong> Confidence scores here are the model's own self-assessment, not a calibrated OCR confidence — treat them as a rough signal only, per the earlier design discussion. Every field should still be reviewed by a person before use.</div>
-  </div>
+  <p class="eyebrow">PIMS</p>
+  <h1>Diagnostic Report Extraction</h1>
+  <p class="lede">Upload a diagnostic report to extract patient details and test results.</p>
 
   <div class="card upload">
     <label class="drop" id="dropZone" tabindex="0">
@@ -123,7 +112,7 @@
 
   <div class="status" id="status">
     <span class="spinner"></span>
-    <span id="statusText">Sending to Gemini and waiting for a response&hellip; this can take 10&ndash;30 seconds.</span>
+    <span id="statusText">Processing your file&hellip; this can take up to a minute.</span>
   </div>
 
   <div class="error-box" id="errorBox"></div>
@@ -160,7 +149,7 @@
     errorBox.classList.remove('show');
     resultsRoot.innerHTML = '';
     status.classList.add('show');
-    statusText.textContent = 'Sending "' + file.name + '" to Gemini and waiting for a response… this can take 10–30 seconds.';
+    statusText.textContent = 'Processing "' + file.name + '"… this can take up to a minute.';
 
     var formData = new FormData();
     formData.append('file', file);
@@ -192,7 +181,7 @@
 
     var meta = document.createElement('div');
     meta.className = 'meta-row';
-    meta.textContent = 'File: ' + payload.fileName + '  ·  Model: ' + payload.model;
+    meta.textContent = 'File: ' + payload.fileName;
     resultsRoot.appendChild(meta);
 
     var patientCard = document.createElement('div');
@@ -211,7 +200,7 @@
     if (reports.length === 0){
       var empty = document.createElement('div');
       empty.className = 'card';
-      empty.innerHTML = '<div class="empty-state">Gemini did not return any recognizable report rows for this file.</div>';
+      empty.innerHTML = '<div class="empty-state">No recognizable report rows came back for this file.</div>';
       resultsRoot.appendChild(empty);
       return;
     }

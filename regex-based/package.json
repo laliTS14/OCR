@@ -1,0 +1,18 @@
+{
+  "name": "pims-ocr-regex-based-demo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Unlimited-OCR (shared with ../unlimited-ocr/'s Python microservice) for reading, fully deterministic regex parsing for categorization — no LLM call anywhere. Built as a speed/accuracy comparison against ../unlimited-ocr/'s Ollama-based approach.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.22.2",
+    "multer": "^2.0.0",
+    "pdf-parse": "^2.4.5",
+    "undici": "^8.10.2"
+  }
+}
