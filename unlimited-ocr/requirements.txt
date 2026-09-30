@@ -1,0 +1,23 @@
+# Install with: .venv/Scripts/python.exe -m pip install -r requirements.txt
+# Then install CPU-only torch/torchvision separately (see README.md) —
+# they need --index-url https://download.pytorch.org/whl/cpu, which pip
+# can't express inside a plain requirements.txt line reliably on Windows.
+
+# transformers MUST be exactly this version — CONFIRMED broken with a
+# newer one (5.17.0): the model's own modeling_deepseekv2.py imports
+# is_torch_fx_available at module load time, which newer transformers
+# removed. See unlimited_ocr_service.py's file header for the full story.
+transformers==4.57.1
+
+flask
+huggingface_hub
+Pillow
+einops
+addict
+easydict
+accelerate
+safetensors
+pymupdf
+psutil
+matplotlib
+requests
