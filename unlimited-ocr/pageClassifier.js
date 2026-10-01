@@ -32,7 +32,7 @@ function classifyPage(text) {
   const letters = (t.match(/[a-z]/gi) || []).length;
   if (letters < MIN_PAGE_LETTERS) return { type: 'no_text', signals: { letters } };
   const lines = t.split('\n').filter((l) => l.trim());
-  const { rows } = parseSection(`(page)\n${t}`, '');
+  const { rows } = parseSection(`\n${t}`, ''); // empty heading line (skipped by the parser)
   const highRows = rows.filter((r) => r.confidence === 'high').length;
   const labWords = count(t, LAB_WORDS);
   const merWords = count(t, MER_WORDS);

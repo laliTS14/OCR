@@ -75,4 +75,10 @@ async function readDocument(fileBuffer, mimeType) {
   return { fullText: texts.join('\n\n'), pageCount: pages.length, pageTimings };
 }
 
-module.exports = { readDocument, ocrPdfPages };
+// Which engine the OCR service runs (must match its OCR_ENGINE; default
+// rapid). Used only to keep each engine's per-page OCR cache separate, so
+// switching engines never mixes their results: <base>/ocr-cache/<engine>/.
+const OCR_ENGINE = (process.env.OCR_ENGINE || 'rapid').toLowerCase();
+const ocrCacheDir = (baseDir) => require('path').join(baseDir, 'ocr-cache', OCR_ENGINE);
+
+module.exports = { readDocument, ocrPdfPages, OCR_ENGINE, ocrCacheDir };

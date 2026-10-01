@@ -60,8 +60,8 @@ const P = [
   ['LDL', 'LDL Cholesterol', ['LIPID'], ['ldl cholesterol', 'cholesterol ldl', 'ldl', 'ldl c', 'ldl direct'], ['mg/dl', 'mmol/l'], null],
   ['VLDL', 'VLDL Cholesterol', ['LIPID'], ['vldl cholesterol', 'vldl', 'cholesterol vldl'], ['mg/dl', 'mmol/l'], null],
   ['NONHDL', 'Non-HDL Cholesterol', ['LIPID'], ['non hdl cholesterol', 'non hdl'], ['mg/dl', 'mmol/l'], null],
-  ['CHOLHDL', 'Total Cholesterol / HDL Ratio', ['LIPID'], ['chol hdl ratio', 'chol hdl', 'cholesterol hdl', 'cholesterol hdl ratio', 'total cholesterol hdl ratio', 'tc hdl ratio', 'tc hdl'], ['ratio'], [0.5, 20]],
-  ['LDLHDL', 'LDL / HDL Ratio', ['LIPID'], ['ldl hdl ratio', 'ldl hdl'], ['ratio'], [0.1, 15]],
+  ['CHOLHDL', 'Total Cholesterol / HDL Ratio', ['LIPID'], ['chol hdl ratio', 'chol hdl', 'cholesterol hdl', 'total c hdl c', 'total c hdl c ratio', 'tc hdl c', 'cholesterol hdl ratio', 'total cholesterol hdl ratio', 'tc hdl ratio', 'tc hdl'], ['ratio'], [0.5, 20]],
+  ['LDLHDL', 'LDL / HDL Ratio', ['LIPID'], ['ldl hdl ratio', 'ldl hdl', 'ldl chol hdl chol ratio', 'ldl c hdl c ratio', 'ldl cholesterol hdl cholesterol ratio'], ['ratio'], [0.1, 15]],
 
   // ---- Kidney ----
   ['CREAT', 'Creatinine', ['KFT'], ['creatinine', 'serum creatinine', 'creatinine serum'], ['mg/dl', 'umol/l'], null],

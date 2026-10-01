@@ -1497,6 +1497,62 @@ parser fit the few files we've seen and get worse on the rest. So:
   showing the lab's own typo `mm 1st Houe` as its name (value and range
   still correct).
 
+## Faster OCR on CPU: quick-pass idea dropped, RapidOCR (ONNX) benchmarked (Oct 1, 2026)
+
+**Why:** a 10-page scan with one report selected still took ~4-5 min — every
+page needing OCR is OCR'd before page classification, and selection only
+filters afterwards.
+
+**Measured where the time goes** (PaddleOCR mobile, this CPU): finding text
+boxes ~1 s/page; **reading them ~0.24-0.37 s per box = ~97% of the time**.
+So shrinking the image doesn't help (800 px ≈ same time), and a cropped
+"quick first pass" was rejected: top-40% missed 12 report types on 15 pages,
+left-35% missed 6 and cut words in half (`CHOLESTERO`) because column
+positions vary by lab. The crop options were removed from
+`paddle_text_service.py` again.
+
+**RapidOCR** (same PP-OCR model family on ONNX Runtime; `rapidocr-onnxruntime`
+1.4.4 + `rapidocr` 3.9.2 in a **separate** venv `paddleocr/.venv-rapid` — it
+needs a different OpenCV than the PaddleOCR venv), same skew correction +
+line rebuilding, same 15 pages, compared with the same script:
+
+| | PaddleOCR mobile (current) | RapidOCR, default Chinese rec | **RapidOCR + English PP-OCRv3 rec** |
+|---|---|---|---|
+| time / page | 31.6 s | 8.9 s | **7.5 s (~4.2× faster)** |
+| rows (high) | 121 (109) | 121 (70) | **124 (111)** |
+| same value as Unlimited-OCR | 99 | 58 | **99** |
+| different value | 1 | 1 | 2 (both parser labelling, not OCR) |
+- The default Chinese rec model drops spaces between English words
+  (`SerumProteinTotal`) → names don't match the dictionary. The English
+  model (`en_PP-OCRv3_rec_infer.onnx`, 8.97 MB, from huggingface.co/SWHL/RapidOCR
+  into `paddleocr/onnx-models/`, gitignored) fixes that; detector = the
+  ch_PP-OCRv4 det bundled with rapidocr-onnxruntime.
+- The like-for-like model (`en_PP-OCRv5_rec_mobile`, what PaddleOCR uses)
+  exists only on ModelScope, which **times out from this network**;
+  converting our own model with `paddle2onnx` fails on this Windows/Paddle
+  3.3.1 setup (DLL load error — plugin uninstalled again).
+- The English charset has no `µ`, so `µ/L` reads as `/L` → added `/l` to
+  the unit vocabulary (a legitimate per-litre count unit anyway).
+- Every value disagreement checked against the page text: RapidOCR read
+  them correctly; differences were dictionary labelling — fixed generically:
+  `LDL Chol/HDL Chol Ratio` and `Total-C/HDL-C` synonyms (token-set matching
+  had labelled them as the other cholesterol ratio / HDL).
+**Switched (Oct 1):** `paddle_text_service.py` now takes `OCR_ENGINE=rapid`
+(default, runs in `.venv-rapid`) or `paddle` (runs in `.venv`); each engine's
+library is imported only when selected. OCR caches are per engine
+(`ocr-cache/rapid/`, `ocr-cache/paddle/` — the earlier PaddleOCR pages were
+moved there), so switching never mixes results.
+**Whole sample folder re-run with RapidOCR:** 57 pages OCR'd in **375 s
+(6.6 s/page)**, whole run ~7 min (was ~22 min of OCR with PaddleOCR);
+**392 rows, confidence 359 high / 31 medium / 2 low** (PaddleOCR: 383 rows,
+355/24/4). Dileep's patient now complete (name/age/sex). A smoke test then
+showed a junk row `(document start) = 9001` — the leading block's placeholder
+heading line was being parsed as a test name; `documentParser.js` and
+`pageClassifier.js` now pass an empty heading line instead. After that fix:
+**391 rows, 359 / 30 / 2** (unlimited-ocr batch: 323 rows, 306 / 15 / 2). Caveat: the English
+rec model is PP-OCRv3 (older than PaddleOCR's v5) — equal on these files;
+keep an eye on it as more labs are added (`batch-eval.js` with each engine).
+
 ## `paddleocr/` rebuilt as the default pipeline, PaddleOCR as its OCR engine (Sept 30, 2026)
 
 User direction: integrate PaddleOCR as default, same approach as

@@ -62,7 +62,9 @@ function parseDocument(ocrDump) {
       if (!t || PAGE_MARKER_RE.test(t) || isProse(l.text) || repeated.has(normLine(t))) return false;
       return j === 0 && s.kind !== 'start' ? true : !isHeaderLine(l.text);
     });
-    const text = (s.kind === 'start' ? ['(document start)'] : []).concat(kept.map((l) => l.text)).join('\n');
+    // the leading block gets an EMPTY heading line — the parser skips it, so
+    // no placeholder text can end up used as a test name
+    const text = (s.kind === 'start' ? [''] : []).concat(kept.map((l) => l.text)).join('\n');
     const typeId = s.kind === 'type' ? s.typeId : null;
     const parsed = parseSection(text, typeId || '');
     return {

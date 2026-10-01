@@ -4,6 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
 const { readPages } = require('./pageReader');
+const { ocrCacheDir, OCR_ENGINE } = require('./paddleText');
 const { categorize } = require('./ollama');
 const { validate } = require('./validate');
 const { createTransactionLog } = require('./transactionLog');
@@ -43,9 +44,10 @@ setInterval(() => {
 
 // Shared by every flow. Reading is PER PAGE (pageReader.js): pages with a
 // usable text layer are read directly; only the rest go to PaddleOCR
-// (paddle_text_service.py, ~30 s/page on this CPU). OCR'd pages are cached in ./ocr-cache
+// (paddle_text_service.py — RapidOCR by default, ~7.5 s/page on this CPU).
+// OCR'd pages are cached in ./ocr-cache/<engine>
 // (gitignored — patient data), so a re-upload never re-OCRs a page.
-const OCR_CACHE_DIR = path.join(__dirname, 'ocr-cache');
+const OCR_CACHE_DIR = ocrCacheDir(__dirname); // ./ocr-cache/<OCR_ENGINE>
 
 async function runTriageAndRead(fileBuffer, mimetype, originalname) {
   const timings = {};
@@ -66,7 +68,7 @@ async function runTriageAndRead(fileBuffer, mimetype, originalname) {
       (read.pages.some((p) => p.source === 'ocr-cached') ? ' (some from the OCR cache)' : ''),
     engine: ocrPages === 0
       ? 'Direct PDF text layer (free, no OCR call)'
-      : `Per page: text layer where usable, PaddleOCR for ${ocrPages} page(s) (self-hosted, CPU, ~30 s/page)`,
+      : `Per page: text layer where usable, OCR (${OCR_ENGINE}) for ${ocrPages} page(s) (self-hosted, CPU)`,
     pages: read.pages,
   };
   const ocrStage = {
@@ -455,6 +457,6 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   const paddleUrl = process.env.PADDLE_TEXT_URL || 'http://localhost:8794';
   console.log(`PIMS PaddleOCR + rules OCR demo running at http://localhost:${PORT}  (main flow: /select.html)`);
-  console.log(`PaddleOCR text service expected at ${paddleUrl} — run "python paddle_text_service.py" separately (see README.md); only pages without a usable text layer are OCR'd, ~30 s/page`);
+  console.log(`OCR service (${OCR_ENGINE}) expected at ${paddleUrl} — run paddle_text_service.py separately (see README.md); only pages without a usable text layer are OCR'd`);
   console.log(`Ollama: ${process.env.OLLAMA_URL || 'http://localhost:11434'}  categorize=${process.env.CATEGORIZE_MODEL || process.env.OLLAMA_MODEL || 'llama3.2:3b'}`);
 });

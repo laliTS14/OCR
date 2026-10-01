@@ -151,29 +151,41 @@ Needs `SARVAM_API_KEY` (get one at
 [dashboard.sarvam.ai](https://dashboard.sarvam.ai)) and optionally
 `SARVAM_BASE_URL`/`SARVAM_LANGUAGE` in `sarvam/.env`.
 
-## `paddleocr/` — the default pipeline: per-page reading, PaddleOCR text OCR, rules-based categorization (Sept 30, 2026)
+## `paddleocr/` — the default pipeline: per-page reading, RapidOCR/PaddleOCR text OCR, rules-based categorization (Sept 30 – Oct 1, 2026)
 
 **This is now the main demo.** Rebuilt as a copy of `unlimited-ocr/`'s full
 pipeline (see that section's "Whole-report flow" and "Rules-based row
-parser" for how each stage works) with **PaddleOCR as the OCR engine** —
-same results as Unlimited-OCR on the 15 scanned pages both read, ~6-7×
-faster on this CPU (~30 s/page vs ~3.5 min; see `PROGRESS.md` "PaddleOCR vs
+parser" for how each stage works) with a light PP-OCR text engine for
+scanned pages. **Default engine: RapidOCR** (PP-OCR models on ONNX Runtime,
+~6.6 s/page on this CPU); PaddleOCR (~24-30 s/page here) remains selectable.
+Both gave the same results as Unlimited-OCR (~3.5 min/page) on the 15
+scanned pages compared (`PROGRESS.md` "Faster OCR on CPU", "PaddleOCR vs
 Unlimited-OCR"). The previous PP-Structure + full-document LLM version of
 this folder is kept in `paddleocr/legacy/` for reference.
 
-Pipeline: per-page reading (`pageReader.js`: text layer where usable,
-PaddleOCR only for the pages without one, cached in `ocr-cache/`) → page
+Pipeline: per-page reading (`pageReader.js`: text layer where usable, OCR
+only for the pages without one, cached per engine in `ocr-cache/<engine>/`) → page
 classification (`pageClassifier.js`: only lab pages parsed) → whole-document
 rules parser (`documentParser.js` + `rowParser.js` + `labVocabulary.js` +
 `paramDictionary.js` + `headerParser.js` + `reportCatalog.js`) → source check
 → validate. The LLM (`ollama.js`) is only a per-section fallback.
 
-- **OCR engine:** `paddle_text_service.py` (Flask, port **8794**) — PP-OCRv5
-  **mobile** text detection + English recognition, text only (no
-  layout/table models, so light on RAM). It corrects page skew from the text
-  boxes' own angle, then rebuilds reading-order lines, turning wide column
-  gaps into tabs, so an OCR'd page looks like a PDF text layer. Node client:
-  `paddleText.js` (same exports as `unlimited-ocr/unlimitedocr.js`).
+- **OCR service:** `paddle_text_service.py` (Flask, port **8794**), engine
+  chosen with `OCR_ENGINE`:
+  - `rapid` (**default**) — RapidOCR (`rapidocr-onnxruntime`): PP-OCRv4
+    mobile detection (bundled) + **English PP-OCRv3 recognition**
+    `onnx-models/en_PP-OCRv3_rec_infer.onnx` (8.97 MB, from
+    `huggingface.co/SWHL/RapidOCR` → `PP-OCRv3/`; gitignored, download it
+    once). The default Chinese rec model drops spaces between English words,
+    so the English model is required. Runs in **`.venv-rapid`**.
+  - `paddle` — PaddleOCR PP-OCRv5 mobile det + English rec, oneDNN off (it
+    crashes on this machine). Runs in **`.venv`**.
+  Both are text only (no layout/table models). The service corrects page
+  skew from the text boxes' own angle, then rebuilds reading-order lines,
+  turning wide column gaps into tabs, so an OCR'd page looks like a PDF text
+  layer. Node client: `paddleText.js` (same exports as
+  `unlimited-ocr/unlimitedocr.js`); set the same `OCR_ENGINE` for the Node
+  app so it uses that engine's cache folder.
 - **Shared code:** the parser/dictionary/catalog/classifier files are copies
   of `unlimited-ocr/`'s — keep the two copies identical when changing either
   (the only intended differences are `paddleText.js`, `pageReader.js`'s
@@ -185,11 +197,14 @@ rules parser (`documentParser.js` + `rowParser.js` + `labVocabulary.js` +
 ### Running this locally
 
 ```bash
-# 1. OCR service (Python 3.9-3.13; the .venv already has paddleocr 3.7)
+# 1. OCR service — default engine RapidOCR (separate venv; Python 3.12)
 cd paddleocr
-.venv\Scripts\activate
+py -3.12 -m venv .venv-rapid
+.venv-rapid\Scripts\pip install rapidocr-onnxruntime flask
+#   + download onnx-models/en_PP-OCRv3_rec_infer.onnx (see "OCR service" above)
 set PYTHONIOENCODING=utf-8 & set PYTHONUTF8=1   # Windows console encoding
-python paddle_text_service.py   # http://localhost:8794 — leave running
+.venv-rapid\Scripts\python paddle_text_service.py   # http://localhost:8794 — leave running
+#   PaddleOCR instead: set OCR_ENGINE=paddle & .venv\Scripts\python paddle_text_service.py
 
 # 2. Node app (separate terminal)
 cd paddleocr

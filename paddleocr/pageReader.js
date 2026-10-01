@@ -1,8 +1,8 @@
 // Per-page reading: every page of a PDF is read the cheapest way that
 // works. Pages with a usable text layer (triage.pageTextUsable) are taken
 // directly — free, instant, exact; ONLY pages without one (scanned pages,
-// garbled embedded OCR layers) are sent to PaddleOCR (paddle_text_service.py,
-// ~30 s/page on this CPU). A mixed "scanned MER + digital lab report" PDF therefore only
+// garbled embedded OCR layers) are sent to the OCR service (paddle_text_service.py —
+// RapidOCR by default, ~7.5 s/page on this CPU). A mixed "scanned MER + digital lab report" PDF therefore only
 // OCRs its scanned pages.
 //
 // Output uses one page-marker format for every page ("--- Page N of M ---",

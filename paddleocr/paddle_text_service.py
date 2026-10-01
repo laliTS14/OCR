@@ -1,11 +1,18 @@
-"""
-PaddleOCR text-OCR microservice — the default OCR engine for this demo.
+r"""
+Text-OCR microservice for this demo — two engines, chosen by OCR_ENGINE:
 
-Classic PaddleOCR (PP-OCRv5 mobile text detection + English recognition),
-text only: no layout/table models, no LLM. On this laptop CPU (i5-1145G7,
-no CUDA GPU) it reads a 1600px report page in ~30 s — ~6-7x faster than
-Unlimited-OCR (../unlimited-ocr), with the same parsed results on the 15
-pages both were tested on (see PROGRESS.md "PaddleOCR vs Unlimited-OCR").
+  rapid  (DEFAULT) RapidOCR on ONNX Runtime: PP-OCRv4 mobile detection (bundled
+         with rapidocr-onnxruntime) + English PP-OCRv3 recognition
+         (onnx-models/en_PP-OCRv3_rec_infer.onnx). ~7.5 s/page on this laptop
+         CPU, same parsed results as PaddleOCR on 15 test pages (PROGRESS.md
+         "Faster OCR on CPU"). Runs in the separate venv: .venv-rapid
+  paddle PaddleOCR (PP-OCRv5 mobile det + English rec), ~30 s/page here
+         because paddle's oneDNN CPU acceleration crashes on this machine
+         and has to stay off. Runs in: .venv
+
+Each engine's library is imported only when selected, so each runs in its
+own venv (they need different OpenCV versions). Both are text only — no
+layout/table models, no LLM.
 
 What it returns per page image is PLAIN TEXT IN READING ORDER, shaped like a
 PDF text layer, so the Node pipeline treats OCR'd and digital pages alike:
@@ -15,10 +22,13 @@ PDF text layer, so the Node pipeline treats OCR'd and digital pages alike:
   - lines: boxes whose vertical centres are close form one line;
   - columns: a horizontal gap wider than ~2.5 character widths becomes a tab.
 
-Run:   PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python paddle_text_service.py
+Run (Windows; UTF-8 console needed or it crashes printing non-ASCII):
+  rapid:  set OCR_ENGINE=rapid  & .venv-rapid\Scripts\python paddle_text_service.py
+  paddle: set OCR_ENGINE=paddle & .venv\Scripts\python paddle_text_service.py
+  (with PYTHONIOENCODING=utf-8 PYTHONUTF8=1)
 Port:  PADDLE_TEXT_PORT (default 8794)
 API:   POST /ocr  (multipart "file" = one page image, PNG/JPG)
-       → { markdown, text, skewDeg, boxes, elapsedSeconds }
+       → { markdown, text, skewDeg, boxes, elapsedSeconds, engine }
        ("markdown" mirrors the Unlimited-OCR service's field name.)
 """
 
@@ -27,29 +37,53 @@ import math
 import os
 import time
 
-# paddlepaddle 3.3.x + oneDNN crashes on this machine with
-# "ConvertPirAttribute2RuntimeAttribute not support" (same bug as
-# paddle_service.py) — must be disabled before paddle is imported.
-os.environ.setdefault("FLAGS_use_mkldnn", "false")
-
 import numpy as np
 from flask import Flask, jsonify, request
 from PIL import Image
-from paddleocr import PaddleOCR
 
+ENGINE = os.environ.get("OCR_ENGINE", "rapid").strip().lower()
 PORT = int(os.environ.get("PADDLE_TEXT_PORT", "8794"))
+HERE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__)
 
 _t0 = time.time()
-_engine = PaddleOCR(
-    use_doc_orientation_classify=False,
-    use_doc_unwarping=False,
-    use_textline_orientation=False,
-    text_detection_model_name="PP-OCRv5_mobile_det",
-    text_recognition_model_name="en_PP-OCRv5_mobile_rec",
-    enable_mkldnn=False,
-)
-print(f"PaddleOCR text engine loaded in {time.time() - _t0:.1f}s", flush=True)
+if ENGINE == "rapid":
+    from rapidocr_onnxruntime import RapidOCR
+
+    _rec_model = os.environ.get("RAPID_REC_MODEL", os.path.join(HERE, "onnx-models", "en_PP-OCRv3_rec_infer.onnx"))
+    if not os.path.exists(_rec_model):
+        raise SystemExit(f"English recognition model not found: {_rec_model} — see README.md (paddleocr section) for the download.")
+    _rapid = RapidOCR(rec_model_path=_rec_model)
+
+    def read_boxes(arr):
+        """→ (texts, polys) for one page image (numpy RGB array)."""
+        result, _ = _rapid(arr, use_cls=False)
+        result = result or []
+        return [r[1] for r in result], [[[float(v) for v in pt] for pt in r[0]] for r in result]
+
+elif ENGINE == "paddle":
+    # paddlepaddle 3.3.x + oneDNN crashes on this machine with
+    # "ConvertPirAttribute2RuntimeAttribute not support" (same bug as
+    # paddle_service.py) — must be disabled before paddle is imported.
+    os.environ.setdefault("FLAGS_use_mkldnn", "false")
+    from paddleocr import PaddleOCR
+
+    _paddle = PaddleOCR(
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+        text_detection_model_name="PP-OCRv5_mobile_det",
+        text_recognition_model_name="en_PP-OCRv5_mobile_rec",
+        enable_mkldnn=False,
+    )
+
+    def read_boxes(arr):
+        res = list(_paddle.predict(arr))[0]
+        return list(res["rec_texts"]), [[[float(v) for v in pt] for pt in poly] for poly in res["rec_polys"]]
+
+else:
+    raise SystemExit(f"Unknown OCR_ENGINE '{ENGINE}' — use 'rapid' or 'paddle'.")
+print(f"OCR engine '{ENGINE}' loaded in {time.time() - _t0:.1f}s", flush=True)
 
 
 def skew_angle(polys):
@@ -111,18 +145,17 @@ def ocr():
         return jsonify({"error": f"Could not read the uploaded image: {exc}"}), 400
     t0 = time.time()
     try:
-        res = list(_engine.predict(np.array(image)))[0]
-        texts = list(res["rec_texts"])
-        polys = [[[float(v) for v in pt] for pt in poly] for poly in res["rec_polys"]]
+        texts, polys = read_boxes(np.array(image))
         text, angle = lines_from(texts, polys)
     except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": f"PaddleOCR failed: {exc}"}), 500
+        return jsonify({"error": f"OCR ({ENGINE}) failed: {exc}"}), 500
     return jsonify({
         "markdown": text,
         "text": text,
         "skewDeg": round(math.degrees(angle), 2),
         "boxes": len(texts),
         "elapsedSeconds": round(time.time() - t0, 2),
+        "engine": ENGINE,
     })
 
 

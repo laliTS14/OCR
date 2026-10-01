@@ -1,10 +1,10 @@
 // CLI test of this demo's pipeline on one file:
 //   node test-extract.js "<path to PDF/JPG/PNG>" [--show-text] [--no-ocr]
-// per-page reading (text layer where usable, PaddleOCR for the rest) →
+// per-page reading (text layer where usable, OCR service for the rest) →
 // page classification (only lab pages parsed) → whole-document rules parser
 // (every test, grouped by report type, "Other" never dropped) → validate.
 // No LLM. paddle_text_service.py must be running for pages that need OCR
-// (--no-ocr skips them). OCR'd pages are cached in ./ocr-cache.
+// (--no-ocr skips them). OCR'd pages are cached in ./ocr-cache/<OCR_ENGINE>.
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
@@ -29,7 +29,7 @@ async function main() {
   const t0 = Date.now();
   const read = await readPages(fs.readFileSync(filePath), mimeType, path.basename(filePath), {
     ocr: !process.argv.includes('--no-ocr'),
-    cacheDir: path.join(__dirname, 'ocr-cache'),
+    cacheDir: require('./paddleText').ocrCacheDir(__dirname),
     onProgress: (m) => console.log(`  … ${m}`),
   });
   const t1 = Date.now();

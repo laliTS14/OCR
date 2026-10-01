@@ -3,9 +3,13 @@ node_modules/
 __pycache__/
 *.pyc
 .venv/
+.venv-rapid/
 
 # Per-transaction pipeline logs (real patient data — never commit)
 logs/
 
 # Per-page OCR cache (real patient data — never commit)
 ocr-cache/
+
+# Downloaded/converted ONNX OCR models (re-download, see README)
+onnx-models/

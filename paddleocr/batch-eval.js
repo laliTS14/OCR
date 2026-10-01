@@ -4,7 +4,7 @@
 // Purpose: judge the parser on MANY reports at once, and look for gaps that
 // recur across labs — never tune it to one file (see PROGRESS.md's "Design
 // rule for the rules-based parser"). No LLM. Scanned files are skipped
-// unless --ocr is given (PaddleOCR, ~30 s/page on CPU, cached).
+// unless --ocr is given (RapidOCR by default, ~7.5 s/page on CPU, cached).
 //
 // Per file it reports every test found (whole-document parsing), grouped by
 // report type (OTHER = fits no category), their confidence mix, and
@@ -18,7 +18,7 @@ const { parseHeader } = require('./headerParser');
 // --ocr: scanned files are read with PaddleOCR (paddle_text_service.py must be
 // running) and the OCR text is cached in ./ocr-cache/<file>.txt, so later
 // runs re-parse from the cache in milliseconds instead of re-OCRing.
-const OCR_CACHE = path.join(__dirname, 'ocr-cache');
+const OCR_CACHE = require('./paddleText').ocrCacheDir(__dirname); // ./ocr-cache/<OCR_ENGINE>
 
 // Per-page reading (pageReader.js): text layer where usable, OCR only for
 // the other pages (with --ocr; per-page cache in ./ocr-cache). Without
