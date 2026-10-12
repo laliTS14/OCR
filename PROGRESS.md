@@ -1497,6 +1497,35 @@ parser fit the few files we've seen and get worse on the rest. So:
   showing the lab's own typo `mm 1st Houe` as its name (value and range
   still correct).
 
+## Auto-improve plan, step 1: human review + answer key (Oct 1, 2026)
+
+User question: how can the rules pipeline "auto-learn" later? Agreed plan:
+(1) capture every human correction + build an answer key, (2) dictionary
+suggestions from corrections — promoted only when the same fix recurs across
+≥3 DCs and `gold-eval.js --compare` shows no drop, (3) once a few thousand
+corrected rows exist, train a small CPU line classifier / field tagger to
+work alongside the rules, (4) optional LoRA fine-tune of the fallback LLM.
+**Hard rule: never learn from the pipeline's own unchecked output** — only
+human-checked answers.
+
+**Step 1 built (`paddleocr/`):** "Review & correct" table on `/select.html`
+(edit / delete / add rows, report type, patient fields; DC name required;
+"show only medium/low confidence" filter) → `POST /api/review` →
+`reviewStore.js` saves the extraction (with document text), the reviewer's
+answer and a per-row diff in `review-data/` (gitignored). "Fully checked"
+reviews become answer keys (`review-data/gold/<fileHash>.json`);
+`gold-eval.js` scores the current parser on them (found, junk, value / unit /
+range / report type / patient accuracy) and `--compare` is the regression
+gate. Verified end to end on a synthetic report (fake patient — the sample
+folder on D: was not mounted): diff counts, answer-key save, scoring and
+compare all correct. Only in `paddleocr/` (not copied to `unlimited-ocr/` —
+review is app-side, not shared parser code).
+
+**Next for step 1:** review 30–50 real reports from as many DCs as possible
+with "Fully checked", then `node gold-eval.js --save` for the first baseline.
+Not yet: per-row source line (the document text is saved instead), reviewer
+identity, editing a saved review later (re-saving overwrites it).
+
 ## Faster OCR on CPU: quick-pass idea dropped, RapidOCR (ONNX) benchmarked (Oct 1, 2026)
 
 **Why:** a 10-page scan with one report selected still took ~4-5 min — every
@@ -1552,6 +1581,150 @@ heading line was being parsed as a test name; `documentParser.js` and
 **391 rows, 359 / 30 / 2** (unlimited-ocr batch: 323 rows, 306 / 15 / 2). Caveat: the English
 rec model is PP-OCRv3 (older than PaddleOCR's v5) — equal on these files;
 keep an eye on it as more labs are added (`batch-eval.js` with each engine).
+
+## OCR insertion API — worker goes through ASP.NET, not the DB (Oct 9, 2026)
+
+New separate solution in the parent repo, `backend/Health_360_OCR`
+(ASP.NET Core 8, same 4-layer layout as the PIMS backend: OCR_API /
+BusinessAccessLayer / DataAccessLayer / DataObject). Endpoints wrap the OCR
+SPs one-to-one; new SP `sp_insert_ocr_manual_report` replaces the worker's
+direct INSERTs for `--file --case`. `worker.js` now uses `ocrApiClient.js`
+and has no DB credentials (mysql2 removed).
+
+**Auth = API key, not the PIMS login.** First built with the PIMS model
+(JWT login as a PIMS user + RSA/AES envelope); dropped the same day by
+decision — the caller is a service, and a dedicated PIMS user account was
+overhead. Now every `api/Ocr/*` call carries `X-Api-Key` (=
+`OcrApi:ApiKey` in the API's appsettings = `OCR_API_KEY` in
+`paddleocr/.env`), plain JSON; rows get `OcrApi:SystemUserId` (1) as
+`inserted_by`. Gotcha: with nullable reference types on, ASP.NET treated
+every non-nullable `string` in the request DOs as required (400 on a
+report with no lab name) — switched off in `Program.cs`.
+
+Tested end to end on UAT through the API: no key / wrong key → 401;
+`RequeueStuckReports` ok; empty queue → `ClaimReport` 404; manual upload
+(Khandelwal PDF → case 1179) → 63 rows, 16 MAPPED / 46 TEST_ONLY /
+1 UNMAPPED, min/max filled; queued path (`worker.js --once`): attempt 1
+failed with the OCR service down → re-queued (not FAILED), attempt 2 →
+DONE, 15 rows; fake PDF (case 1188) → FAILED with the file-type error;
+`ReapplyTestMapping` ok. Test rows left on UAT: ocr_case_id 1–4.
+
+## Reference range split into min / max (Oct 9, 2026)
+
+`validate.js` now adds `range_min` / `range_max` to every row of the
+pipeline output — since Oct 12 as **text, each number exactly as printed**
+(`"0.10"`, not 0.1; `null` = open end or not parseable); the printed range
+stays in `range`. The worker inserts these straight into
+`tbl_ocr_data.min_range` / `max_range` (VARCHAR since Oct 12).
+
+**Oct 12 — `tbl_ocr_data` slimmed down** (by decision): dropped
+`value_num` (result stored once, as printed, in `value`), `flag`,
+`confidence`, `extraction_method`, `row_seq` (order = `ocr_data_id`),
+`mapping_status`, `is_expected` (mapping still in `test_id` /
+`sub_test_id` / `ocr_test_mapping_id`) — parent repo
+`database/tables/ocr_data_column_cleanup.sql`, applied on UAT;
+`sp_save_ocr_result` now takes 12 fields per row. Re-tested through the
+API (Khandelwal PDF → case 1298, report 13): 63 rows, min/max as printed
+("0.10" / "0.28", "Up to 40" → NULL / "40"), 16 mapped to a sub-test /
+46 test level / 1 unmapped. The high/low flag still exists in the
+pipeline output (`validation.status`, kept in `result_json`), just not
+as a column.
+Same splitter drives the high/low flag. Universal rules added — no
+per-report fixes:
+
+- `13.0 – 17.0` (en/em dash), `13 to 17`, `Upto 40`, `<=`/`≥`,
+  `0.6-1.2 mg/dL` (unit after the range), `.51` (no leading zero — was
+  read as 51).
+- **Sex-specific ranges** (`Male: 13-17 Female: 12-15`, `M … F …`): the
+  half matching `patient.sex`; unknown sex → unchecked. Previously the last
+  (female) half was always used — wrong min/max and flags for men.
+- **Interpretation tables** (≥2 labelled segments with numbers): the
+  healthy-labelled segment (normal / non-diabetic / desirable /
+  sufficient / optimal / negative, not "near/borderline/pre"), else the
+  adult segment, else a leading unlabelled range; none → unchecked
+  (cardiac risk tables).
+
+Checked over every distinct row in all 84 saved `04_validated.json` runs
+(617 rows; gold set is still empty, so `gold-eval.js` can't gate this):
+ranges parsed 349 → 371; 27 rows unchecked → normal (e.g. `Upto 190`,
+`07 to 35`, trailing `*`), Vitamin D 21.5 and eGFR 66 high → low (correct:
+below "Sufficient" / "Normal ≥ 90"), 3 risk-table rows low → unchecked;
+no previously-correct flag lost. Copied to `unlimited-ocr/`,
+`hybrid-ocr/`, `regex-based/` (kept identical).
+
+## PIMS integration: DB queue + `worker.js` (Oct 8, 2026)
+
+Decided flow: **OCR runs first, digitization uses the result later.**
+When report-upload QC passes for every report of a case
+(`sp_update_qc_remark`, status 22 — the same transaction that creates
+`tbl_digi_master`), the case's pathology PDFs
+(`tbl_report_upload_document.Group_test_type_id = 3`) are queued. Paths
+come from `tbl_report_upload_document` (not `tbl_digi_files`, which is only
+filled during digitization). After QC there is no re-upload, so each PDF
+is OCR'd once.
+
+- **3 tables** (parent repo, `database/tables/ocr_extraction_tables.sql`):
+  `tbl_ocr_case_list` (case), `tbl_ocr_report_details` (one per PDF — also
+  the work queue; holds header fields, raw text, full JSON),
+  `tbl_ocr_data` (one row per test). Statuses in `tbl_lookup_master`
+  (`OcrCaseStatus`, `OcrReportStatus`). utf8.
+- **Tests are stored as printed** (`test_name_raw` + our own
+  `param_code`) **and mapped** to `tbl_test_master` / `tbl_subtest_master`
+  through a data-driven table, `tbl_ocr_test_mapping` (param_code →
+  test_id + optional sub_test_id; parent repo
+  `database/tables/ocr_test_mapping.sql`, **applied on UAT Oct 9**: 105
+  seed rows). Tested: the queued Blood_Report re-processed through the
+  worker → 14 CBC rows TEST_ONLY + is_expected 1, junk row UNMAPPED; in a
+  rolled-back transaction ALT/TBIL → MAPPED, DBIL → TEST_ONLY, Vitamin D →
+  UNMAPPED, and CRP / cotinine switched to HS-CRP / blood cotinine once the
+  case ordered those. Seed gotcha: `tbl_test_master` is latin1 — name
+  comparisons are done via `CONVERT(… USING utf8mb4)`. The masters are incomplete (CBC has a single "Hemogram"
+  sub-test; LFT lacks DBIL/IBIL/ALP/TP; electrolytes and urine routine are
+  single dropdowns), so many values map to the test only (`TEST_ONLY`)
+  until the masters are fixed — then update mapping rows and run
+  `sp_reapply_ocr_test_mapping`; no worker change needed. Ambiguous codes
+  (CRP vs HS-CRP, urine vs blood cotinine) resolve to whichever the case
+  ordered (`tbl_digi_test_details`).
+- **Insert-only for now** — no API, no read SPs.
+- **`worker.js`** polls the queue (claim is one atomic
+  `UPDATE … LIMIT 1`, so several workers never share a report), runs
+  `pipeline.js`'s `extractDocument()` (moved out of `server.js` unchanged —
+  confirmed identical output on the Khandelwal report, 11 reports / 63
+  rows), and saves via SPs. Default engine `rules` (no LLM).
+- **Deployed on UAT** (`health360_UAT`, MySQL **5.5.45**,
+  `max_allowed_packet` 1MB → raw text / JSON capped at 250K chars each):
+  tables, SPs, QC SP change and lookups (ids 103–111) confirmed present;
+  `node worker.js --once` against the empty queue connects and calls the
+  SPs correctly.
+- **First end-to-end run on UAT (Oct 9):** queued manually (same INSERTs
+  as the QC SP; `tbl_ocr_case_list.ocr_remark = 'MANUAL TEST …'`,
+  ocr_case_id 1 / ocr_report_id 1) — `report_upload_id 470`, case 1046,
+  `Blood_Report.webp` (a Drlogy sample CBC image). Claimed → downloaded →
+  OCR'd (1 page) → saved in 8 s: 14 CBC rows all correct (values, units,
+  min/max, low/high flags), plus 1 junk `OTHER` row (the lab's phone
+  number); case → COMPLETED, report → DONE. No patient name or dates were
+  read from that header (name_match NULL).
+- **Manual test mode (Oct 9):** `node worker.js --file <report> --case
+  <case_id>` queues a local file for a case and runs the real
+  save/mapping path, skipping upload + QC. Khandelwal PDF → case 1272
+  (ordered CBC/ESR/FBS/HbA1c/HBsAg/HIV/LFT/LIPID/RFT/RUA): 63 rows in 7 s;
+  15 MAPPED to their own sub-test (ESR, FBS, HbA1c, HBsAg, HIV, LFT
+  ×5, lipid ×3, creatinine, BUN), 46 TEST_ONLY (CBC, extra LFT/HbA1c
+  values, urine), 1 cotinine MAPPED but not ordered, 1 junk UNMAPPED;
+  name_match 0 (different patient — the check works).
+- **UAT file reality:** of 61 active pathology uploads, only 45 files
+  exist on the report-upload server, and they are almost all test junk
+  (logos, screenshots, an MOU) — no real digital lab PDF. A missing file
+  comes back as **HTTP 200 + the frontend's index.html** (SPA fallback),
+  so the worker now checks the file's magic bytes before parsing.
+  `.webp` added (the DC upload screen allows it; Pillow reads it).
+- **OCR-cache bug found (web demo still affected):** `pageReader.js`
+  caches OCR'd pages by *file name* only, so two different uploads with
+  the same name share cached text. The worker avoids it by prefixing the
+  file's sha256; `server.js` / `batch-eval.js` uploads are not fixed yet.
+- Dry run on the Khandelwal report also shows a parser junk row
+  (`"Please Note Page" = 2`, range "of 7") — the page footer leaking in as
+  a test; a universal footer filter is a parser to-do.
 
 ## `paddleocr/` rebuilt as the default pipeline, PaddleOCR as its OCR engine (Sept 30, 2026)
 
@@ -1873,9 +2046,10 @@ sections → `needsFallback` (LLM or review), not wrong rows; `Hb 136 g/dL`
    cost is worth it long-term (vs. waiting for GPU hardware).
 4. Test a genuinely scanned (non-digital) report end-to-end through
    PaddleOCR + Ollama — this path has never actually been validated.
-5. Once accuracy is trustworthy enough, start the backend integration
-   (a new endpoint/BAL/DAL wired to `UploadReportDocument`'s flow) —
-   not started yet.
+5. Backend integration — DB queue (Oct 8) + the worker now goes through
+   the separate OCR insertion API `backend/Health_360_OCR` (Oct 9): see
+   "OCR insertion API" and "PIMS integration" below. Next: a full run with
+   a real service-user login, then how digitization reads `tbl_ocr_data`.
 6. **Independent of the paddleocr track above:** `sarvam/`'s first real
    runs succeeded on both modes — same validation discipline as item 1
    above applies before trusting either: re-run the same

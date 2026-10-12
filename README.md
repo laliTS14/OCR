@@ -191,6 +191,19 @@ rules parser (`documentParser.js` + `rowParser.js` + `labVocabulary.js` +
   (the only intended differences are `paddleText.js`, `pageReader.js`'s
   require, `server.js` strings/port, `ollama.js` always using the plain-text
   prompt, and `test-extract.js`).
+- **Human review (`reviewStore.js`, `gold-eval.js`):** below the results on
+  `/select.html`, a "Review & correct" table lets a reviewer fix any test /
+  value / unit / range / report type, delete junk rows, add missed tests and
+  fix patient fields (DC name required). `POST /api/review` saves the answer
+  with a per-row diff (ok / edited / retyped / deleted / added) next to what
+  the pipeline produced; `GET /api/review-stats` gives totals. Ticking
+  **Fully checked** also stores the report (with its document text) as an
+  answer key. Everything goes to `review-data/` (gitignored — patient data):
+  `extractions/`, `corrections/`, `gold/` (keyed by file hash).
+  `node gold-eval.js [--verbose] [--save | --compare]` re-parses every
+  answer key with the current code (no PDF/OCR, milliseconds) and reports
+  tests found, junk rows, and value / unit / range / report-type / patient
+  accuracy; `--compare` exits 1 if any metric dropped vs the saved baseline.
 - **Also still here:** `paddle_service.py` (PP-Structure, port 8791) — not
   used by the new pipeline.
 
@@ -212,9 +225,79 @@ npm install
 npm start                       # http://localhost:8792 → open /select.html
 node test-extract.js "<file>"   # CLI: pages, patient, every test, validation
 node batch-eval.js "<folder>" --ocr   # whole folder, OCR only where needed
+node gold-eval.js --compare     # accuracy vs the human answer key (review-data/gold/)
 ```
 Ollama is only needed for the optional LLM fallback (`engine=auto` when a
 section can't be parsed, or `engine=llm`).
+
+**Shared pipeline:** `pipeline.js` (`extractDocument()`: read → rules parse
+→ LLM fallback → source check → validate) is used by both `server.js`'s
+`/api/extract-selected` and `worker.js`, so both produce identical output.
+Each output report also carries `type_id`, `page_numbers` and `method`
+(`rules` / `llm` / `llm-fallback`), and every row carries `range_min` /
+`range_max` — the printed reference range split in two by `validate.js`,
+each number kept exactly as printed (`"0.10"`, a string; sex-specific
+ranges use `patient.sex`; interpretation tables use the
+normal/sufficient/adult segment; `null` = open end or not parseable).
+The worker stores them in `tbl_ocr_data.min_range` / `max_range` (text).
+`tbl_ocr_data` keeps `value` as printed only — no numeric copy, flag,
+confidence or row sequence (the high/low `validation` stays in the
+pipeline output / `result_json`).
+
+### OCR worker (`worker.js`) — PIMS integration, through the OCR API
+
+Processes the PIMS OCR queue **through the OCR insertion API**
+(`backend/Health_360_OCR` in the parent repo — ASP.NET, same layered
+architecture as the PIMS backend; plain JSON + an `X-Api-Key` header;
+client: `ocrApiClient.js`).
+The worker never connects to the DB. Report-upload QC
+(`sp_update_qc_remark`, status 22) queues each case's pathology files
+(`tbl_report_upload_document.Group_test_type_id = 3`) into
+`tbl_ocr_case_list` / `tbl_ocr_report_details`; the worker claims one
+report at a time (`api/Ocr/ClaimReport`),
+downloads it, runs `extractDocument()` on everything (`typeIds ['ALL']`),
+and saves the result (`api/Ocr/SaveOcrResult` → `tbl_ocr_data`, one row per
+test, mapped to PIMS tests) or records the failure
+(`api/Ocr/MarkReportFailed`, 3 attempts). Stuck reports are re-queued on
+start and every 10 min (`api/Ocr/RequeueStuckReports`). Tables/SPs live in
+the parent repo: `database/tables/ocr_extraction_tables.sql`,
+`database/tables/ocr_test_mapping.sql`,
+`database/stored_procedures/ocr_extraction_sps.sql`,
+`database/stored_procedures/ocr_sp_update_qc_remark.sql` (see the parent
+`database.md` / `backend.md`).
+
+```bash
+cd paddleocr
+npm install
+node worker.js --file "<pdf>"      # dry run: what would be saved — no API / DB at all
+node worker.js --file "<pdf>" --case <case_id>
+                                   # TEST: queue a local file for that case (as if uploaded +
+                                   # report QC passed) and save it now (api/Ocr/QueueManualReport) —
+                                   # the case needs a tbl_digi_master row; rows are tagged
+                                   # file_path 'manual-upload/…' and get one attempt only
+npm run worker                     # run continuously (Ctrl+C finishes the current report)
+node worker.js --once              # process at most one queued report
+```
+
+Needs the OCR API running (`dotnet run --project OCR_API/OCR_API.csproj` in
+`backend/Health_360_OCR`) and `paddle_text_service.py` for scanned pages.
+`.env` keys: `OCR_API_URL` (dev `https://localhost:7196`),
+`OCR_API_KEY` (must equal `OcrApi:ApiKey` in the API's
+`appsettings.json`), `OCR_API_INSECURE_TLS=1` (accept the dev self-signed certificate),
+`REPORT_UPLOAD_BASE_URL` (backend `paths:ReportUploadDocBaseUrl`) or
+`REPORT_UPLOAD_BASE_FOLDER` (read from disk on the file server),
+`OCR_WORKER_ENGINE` (`rules` default / `auto` / `llm`),
+`OCR_WORKER_CONCURRENCY` (default 1),
+`OCR_WORKER_POLL_MS` (5000), `OCR_WORKER_STUCK_MINUTES` (30),
+`PIPELINE_VERSION` (default `<engine>-<git short hash>`).
+
+Accepted files: `.pdf`, `.jpg`/`.jpeg`, `.png`, `.webp`. Downloaded bytes are
+checked against the type before parsing — the report-upload site returns
+HTTP 200 with its `index.html` for a missing file.
+
+The file name passed to the pipeline is prefixed with the file's sha256,
+because the per-page OCR cache is keyed by file name and DC uploads often
+share names.
 
 ### Previous version (now in `paddleocr/legacy/`)
 

@@ -194,10 +194,16 @@ the hard constraint). Its pipeline is rules-first and template-free — read
 PROGRESS.md's "Design rule for the rules-based parser" before changing any
 parsing rule: only universal lab-report knowledge, never per-report fixes;
 judge changes over a batch (`batch-eval.js`), not one file. MER
-questionnaires are parked (page classification skips them). Open items:
+questionnaires are parked (page classification skips them). Human review
+(`/select.html` "Review & correct" → `review-data/`, gitignored) builds the
+answer key; `node gold-eval.js --compare` is the regression gate — run it
+before keeping any parser/dictionary change. Open items:
 more sample reports from more DCs, MER pipeline, per-insurer templates,
-real backend integration (not started — no controller/BAL/DAL/route
-references any of these demos today).
+how digitization consumes `tbl_ocr_data`. PIMS integration exists only as
+`paddleocr/worker.js`, which processes the OCR queue through a separate
+ASP.NET API in the parent repo (`backend/Health_360_OCR`, client
+`paddleocr/ocrApiClient.js`; see PROGRESS.md "PIMS integration") — the
+main PIMS backend has no OCR controller.
 
 ## Keeping docs current
 
