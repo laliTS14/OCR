@@ -1582,6 +1582,39 @@ heading line was being parsed as a test name; `documentParser.js` and
 rec model is PP-OCRv3 (older than PaddleOCR's v5) — equal on these files;
 keep an eye on it as more labs are added (`batch-eval.js` with each engine).
 
+## Automatic processing: sweep + services (Oct 12, 2026)
+
+Decision: no MySQL event scheduler — events can only run SQL (the work
+is PDF reading + RapidOCR + Node), and on MySQL 5.5 the event scheduler is
+a server-wide switch. The worker already polls the queue every 5 s; what
+was missing was (a) files that never got queued and (b) keeping the
+processes running.
+
+- **Sweep** — `sp_queue_missed_ocr_reports` (parent repo
+  `ocr_extraction_sps.sql`) + `api/Ocr/QueueMissedReports`; the worker
+  calls it on start and every `OCR_WORKER_SWEEP_MINUTES` (10), max
+  `OCR_WORKER_SWEEP_MAX` (200) files per run. Finds QC-passed pathology
+  files with no queue row (UAT had 31 across 25 cases, mostly from before
+  OCR existed).
+- **Services** — API: `backend/Health_360_OCR/deploy/install-service.ps1`
+  (Windows service `Health360OcrApi`, `UseWindowsService()`, plain HTTP on
+  localhost:5235 by default). OCR text service + worker:
+  `paddleocr/deploy/install-tasks.ps1` (boot-time scheduled tasks as
+  SYSTEM, each running a `.cmd` restart loop with a log). Nothing extra to
+  download (no NSSM / PM2).
+- **Tested** (nothing installed — the installers need admin and are a
+  deliberate server change): published API run as the service would
+  (`OCR_API.exe --urls http://localhost:5235`, 401 without a key); both
+  `.cmd` launchers; worker started by `run-worker.cmd` with sweep max 3 →
+  swept 3 files (2 new cases), also drained reports 7–10 that real report
+  QC on UAT had queued (cases 1327–1332, non-lab images → 0 rows); killed
+  the worker → launcher restarted it, its start-up sweep queued the next 3;
+  one of those (`photo55.png`) failed 3× ("not a valid image/png") →
+  FAILED; no upload file queued twice. Installer scripts parse in Windows
+  PowerShell 5.1 — after removing em dashes, which 5.1 misreads in
+  BOM-less files and which broke the parse. **25 missed files remain** on
+  UAT for the sweep once the worker runs for real.
+
 ## OCR insertion API — worker goes through ASP.NET, not the DB (Oct 9, 2026)
 
 New separate solution in the parent repo, `backend/Health_360_OCR`
@@ -1678,13 +1711,19 @@ is OCR'd once.
   rolled-back transaction ALT/TBIL → MAPPED, DBIL → TEST_ONLY, Vitamin D →
   UNMAPPED, and CRP / cotinine switched to HS-CRP / blood cotinine once the
   case ordered those. Seed gotcha: `tbl_test_master` is latin1 — name
-  comparisons are done via `CONVERT(… USING utf8mb4)`. The masters are incomplete (CBC has a single "Hemogram"
-  sub-test; LFT lacks DBIL/IBIL/ALP/TP; electrolytes and urine routine are
-  single dropdowns), so many values map to the test only (`TEST_ONLY`)
-  until the masters are fixed — then update mapping rows and run
-  `sp_reapply_ocr_test_mapping`; no worker change needed. Ambiguous codes
-  (CRP vs HS-CRP, urine vs blood cotinine) resolve to whichever the case
-  ordered (`tbl_digi_test_details`).
+  comparisons are done via `CONVERT(… USING utf8mb4)`. Ambiguous codes
+  resolve to whichever test the case ordered (`tbl_digi_test_details`).
+- **Re-mapped Oct 13, 2026 to the corrected masters.** The pathology
+  masters were rebuilt with new ids (CBC now has Hb … basophils as
+  sub-tests, LFT/RFT/URA got real sub-tests), which made the old rows point
+  at wrong tests (ESR → "Total RBC Count"). The seed moved to a re-runnable
+  sync, `database/tables/ocr_test_mapping_seed.sql` (name-matched list;
+  inserts missing, deactivates unlisted): 103 active rows, all names found.
+  `sp_reapply_ocr_test_mapping` on UAT: 7 reports, 290 rows to a sub-test,
+  78 test-level only (CBC absolute counts, MPV/PCT/PDW, ratios, urine
+  microscopy), 25 unmapped (HbA1c/eAG and HIV — not in the master — plus 7
+  null-code junk rows); 0 rows whose sub-test belongs to another test;
+  a second seed run changes nothing.
 - **Insert-only for now** — no API, no read SPs.
 - **`worker.js`** polls the queue (claim is one atomic
   `UPDATE … LIMIT 1`, so several workers never share a report), runs

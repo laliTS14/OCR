@@ -6,8 +6,10 @@
 // this worker loops: claim the next QUEUED report (POST api/Ocr/ClaimReport)
 // → fetch the file → run the same pipeline as the web demo (pipeline.js) →
 // save the result (api/Ocr/SaveOcrResult) or record the failure
-// (api/Ocr/MarkReportFailed, retried up to 3 times). Stuck reports are
-// re-queued on start and every 10 min (api/Ocr/RequeueStuckReports).
+// (api/Ocr/MarkReportFailed, retried up to 3 times). On start and every
+// OCR_WORKER_SWEEP_MINUTES (10): stuck reports are re-queued
+// (api/Ocr/RequeueStuckReports) and the sweep queues QC-passed pathology
+// files that were never queued (api/Ocr/QueueMissedReports).
 //
 //   node worker.js                 run continuously (Ctrl+C finishes the current report, then exits)
 //   node worker.js --once          process at most one queued report, then exit
@@ -33,6 +35,9 @@ const ENGINE = ['rules', 'auto', 'llm'].includes(process.env.OCR_WORKER_ENGINE) 
 const CONCURRENCY = Math.max(1, parseInt(process.env.OCR_WORKER_CONCURRENCY || '1', 10));
 const POLL_MS = parseInt(process.env.OCR_WORKER_POLL_MS || '5000', 10);
 const STUCK_MINUTES = parseInt(process.env.OCR_WORKER_STUCK_MINUTES || '30', 10);
+// sweep for QC-passed pathology files that were never queued: every N minutes (0 = off), max files per run
+const SWEEP_MINUTES = parseInt(process.env.OCR_WORKER_SWEEP_MINUTES || '10', 10);
+const SWEEP_MAX = parseInt(process.env.OCR_WORKER_SWEEP_MAX || '200', 10);
 const MAX_BYTES = 15 * 1024 * 1024; // same cap as the web demo
 const MAX_TEXT_CHARS = 250 * 1024;  // raw_text / result_json each — the UAT server (MySQL 5.5) has a 1MB max_allowed_packet per CALL
 
@@ -336,18 +341,31 @@ async function run({ once }) {
     console.log('Stopping after the current report(s)… (Ctrl+C again to force)');
   });
 
-  const requeue = async () => {
+  // Housekeeping, on start and every SWEEP_MINUTES:
+  //  - re-queue reports a crashed worker left PROCESSING
+  //  - the sweep: queue QC-passed pathology files that were never queued
+  //    (cases from before OCR existed, files added after QC) — at most
+  //    SWEEP_MAX per run, so a large backlog is spread over several runs
+  const housekeeping = async () => {
     try {
       const r = await api.call('/api/Ocr/RequeueStuckReports', { StuckMinutes: STUCK_MINUTES });
       if (r && (r.Requeued || r.MarkedFailed)) console.log(`[requeue] ${r.Requeued} re-queued, ${r.MarkedFailed} marked FAILED (stuck > ${STUCK_MINUTES} min)`);
     } catch (err) {
       console.error(`[requeue] ${err.message}`);
     }
+    if (SWEEP_MINUTES <= 0) return;
+    try {
+      const s = await api.call('/api/Ocr/QueueMissedReports', { MaxFiles: SWEEP_MAX });
+      if (s && s.FilesQueued) console.log(`[sweep] ${s.FilesQueued} missed file(s) queued (${s.CasesAdded} new case(s))`);
+    } catch (err) {
+      console.error(`[sweep] ${err.message}`);
+    }
   };
-  await requeue();
-  const requeueTimer = setInterval(requeue, 10 * 60 * 1000);
+  await housekeeping();
+  const housekeepingTimer = setInterval(housekeeping, Math.max(1, SWEEP_MINUTES || 10) * 60 * 1000);
 
-  console.log(`OCR worker: engine=${ENGINE}, version=${PIPELINE_VERSION}, concurrency=${CONCURRENCY}, api=${process.env.OCR_API_URL}`);
+  console.log(`OCR worker: engine=${ENGINE}, version=${PIPELINE_VERSION}, concurrency=${CONCURRENCY}, ` +
+    `sweep=${SWEEP_MINUTES > 0 ? `every ${SWEEP_MINUTES} min, max ${SWEEP_MAX}` : 'off'}, api=${process.env.OCR_API_URL}`);
   const loop = async (i) => {
     const name = `${os.hostname()}-${process.pid}-${i}`.slice(0, 50);
     while (!stopping) {
@@ -362,7 +380,7 @@ async function run({ once }) {
     }
   };
   await Promise.all(Array.from({ length: once ? 1 : CONCURRENCY }, (_, i) => loop(i + 1)));
-  clearInterval(requeueTimer);
+  clearInterval(housekeepingTimer);
   await api.close();
 }
 

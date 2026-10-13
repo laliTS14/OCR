@@ -289,7 +289,33 @@ Needs the OCR API running (`dotnet run --project OCR_API/OCR_API.csproj` in
 `OCR_WORKER_ENGINE` (`rules` default / `auto` / `llm`),
 `OCR_WORKER_CONCURRENCY` (default 1),
 `OCR_WORKER_POLL_MS` (5000), `OCR_WORKER_STUCK_MINUTES` (30),
+`OCR_WORKER_SWEEP_MINUTES` (10; 0 = off) / `OCR_WORKER_SWEEP_MAX` (200),
 `PIPELINE_VERSION` (default `<engine>-<git short hash>`).
+
+**Sweep:** on start and every `OCR_WORKER_SWEEP_MINUTES` the worker calls
+`api/Ocr/QueueMissedReports`, which queues pathology files of QC-passed
+cases that were never queued (cases from before OCR existed, files added
+after QC) — at most `OCR_WORKER_SWEEP_MAX` per run, oldest first.
+
+**Running on a server** (`paddleocr/deploy/`, Windows, no extra tools):
+
+```powershell
+# elevated PowerShell, after: .venv-rapid set up, npm install, .env pointing at the
+# installed OCR API (backend/Health_360_OCR/deploy/install-service.ps1 → OCR_API_URL=http://localhost:5235)
+.\deploy\install-tasks.ps1          # register + start both
+.\deploy\uninstall-tasks.ps1
+Get-ScheduledTask -TaskName 'Health360 OCR*' | Select TaskName, State
+```
+
+`install-tasks.ps1` registers two Task Scheduler tasks that start at boot as
+SYSTEM: **Health360 OCR Text Service** (`deploy\run-ocr-service.cmd` →
+`paddle_text_service.py`) and **Health360 OCR Worker**
+(`deploy\run-worker.cmd` → `worker.js`, 1 min after boot). Each `.cmd`
+restarts its process 10 s after it exits or crashes; logs go to
+`paddleocr/logs/service/` (`ocr-service.log`, `worker.log`, appended — no
+rotation). The `.ps1` / `.cmd` files are kept pure ASCII: Windows
+PowerShell 5.1 reads BOM-less scripts as ANSI, and an em dash once broke
+the parse.
 
 Accepted files: `.pdf`, `.jpg`/`.jpeg`, `.png`, `.webp`. Downloaded bytes are
 checked against the type before parsing — the report-upload site returns
