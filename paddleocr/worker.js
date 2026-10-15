@@ -2,14 +2,14 @@
 // (backend/Health_360_OCR, ASP.NET; client: ocrApiClient.js). The worker
 // never touches the database itself.
 //
-// Report-upload QC (sp_update_qc_remark) queues each case's pathology files;
-// this worker loops: claim the next QUEUED report (POST api/Ocr/ClaimReport)
+// The database fills the queue: report QC (sp_update_qc_remark) queues each
+// case's pathology files, and the MySQL event ev_queue_ocr_reports (every
+// 10 min) queues anything QC missed and re-queues reports stuck in
+// PROCESSING (database/stored_procedures/ocr_queue_job.sql). This worker
+// only consumes it: claim the next QUEUED report (POST api/Ocr/ClaimReport)
 // → fetch the file → run the same pipeline as the web demo (pipeline.js) →
 // save the result (api/Ocr/SaveOcrResult) or record the failure
-// (api/Ocr/MarkReportFailed, retried up to 3 times). On start and every
-// OCR_WORKER_SWEEP_MINUTES (10): stuck reports are re-queued
-// (api/Ocr/RequeueStuckReports) and the sweep queues QC-passed pathology
-// files that were never queued (api/Ocr/QueueMissedReports).
+// (api/Ocr/MarkReportFailed, retried up to 3 times).
 //
 //   node worker.js                 run continuously (Ctrl+C finishes the current report, then exits)
 //   node worker.js --once          process at most one queued report, then exit
@@ -34,10 +34,6 @@ const { createClientFromEnv, OcrApiError } = require('./ocrApiClient');
 const ENGINE = ['rules', 'auto', 'llm'].includes(process.env.OCR_WORKER_ENGINE) ? process.env.OCR_WORKER_ENGINE : 'rules';
 const CONCURRENCY = Math.max(1, parseInt(process.env.OCR_WORKER_CONCURRENCY || '1', 10));
 const POLL_MS = parseInt(process.env.OCR_WORKER_POLL_MS || '5000', 10);
-const STUCK_MINUTES = parseInt(process.env.OCR_WORKER_STUCK_MINUTES || '30', 10);
-// sweep for QC-passed pathology files that were never queued: every N minutes (0 = off), max files per run
-const SWEEP_MINUTES = parseInt(process.env.OCR_WORKER_SWEEP_MINUTES || '10', 10);
-const SWEEP_MAX = parseInt(process.env.OCR_WORKER_SWEEP_MAX || '200', 10);
 const MAX_BYTES = 15 * 1024 * 1024; // same cap as the web demo
 const MAX_TEXT_CHARS = 250 * 1024;  // raw_text / result_json each — the UAT server (MySQL 5.5) has a 1MB max_allowed_packet per CALL
 
@@ -165,22 +161,33 @@ async function fetchFile(job) {
   return buf;
 }
 
-// The report-upload site answers a missing file with HTTP 200 and the
-// frontend's index.html (SPA fallback), so a status check alone would pass
-// an HTML page into the pipeline. Check the bytes match the claimed type.
-function checkFileBytes(buf, mimetype) {
-  const head = buf.subarray(0, 8);
-  const ok = mimetype === 'application/pdf' ? head.toString('latin1').startsWith('%PDF')
-    : mimetype === 'image/png' ? head.equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-      : mimetype === 'image/jpeg' ? head[0] === 0xff && head[1] === 0xd8
-        : mimetype === 'image/webp' ? head.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP'
-          : false;
-  if (!ok) {
-    const looksHtml = /^\s*<(!doctype|html)/i.test(buf.subarray(0, 64).toString('utf8'));
-    throw new Error(looksHtml
-      ? 'File not found on the report-upload server (got the website\'s HTML page instead of the file).'
-      : `Downloaded content is not a valid ${mimetype} file.`);
-  }
+// Decides the file type from its bytes, not its name: DCs upload JPEG photos
+// named .png (seen on UAT, Oct 13), and the report-upload site answers a
+// missing file with HTTP 200 and the frontend's index.html (SPA fallback), so
+// neither the extension nor the status code can be trusted. Any PDF or image
+// the OCR service can open is processed (it decodes images with Pillow by
+// content); the extension is ignored. Returns the real mimetype, or null.
+// Multi-page TIFF / animated GIF: only the first frame is read.
+function sniffMime(buf) {
+  const head = buf.subarray(0, 12);
+  const ascii = (a, b) => head.toString('latin1', a, b);
+  if (buf.subarray(0, 1024).toString('latin1').includes('%PDF-')) return 'application/pdf'; // some PDFs carry junk before the header
+  if (head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'image/jpeg';
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'image/webp';
+  if (head.subarray(0, 4).equals(Buffer.from([0x49, 0x49, 0x2a, 0x00])) || head.subarray(0, 4).equals(Buffer.from([0x4d, 0x4d, 0x00, 0x2a]))) return 'image/tiff';
+  if (ascii(0, 2) === 'BM') return 'image/bmp';
+  if (ascii(0, 4) === 'GIF8') return 'image/gif';
+  return null;
+}
+
+function checkFileBytes(buf, claimedMime) {
+  const actual = sniffMime(buf);
+  if (actual) return actual;
+  const looksHtml = /^\s*<(!doctype|html)/i.test(buf.subarray(0, 64).toString('utf8'));
+  throw new Error(looksHtml
+    ? 'File not found on the report-upload server (got the website\'s HTML page instead of the file).'
+    : `Not a PDF or image file (${claimedMime || 'unknown extension'}) — nothing to OCR.`);
 }
 
 // ---------- one report ----------
@@ -230,7 +237,7 @@ async function extractForApi(buffer, mimetype, fileName, clientName, txLog) {
 async function extractAndSave(api, workerName, job, buffer, mimetype, txLog) {
   const label = `report ${job.OcrReportId} (case ${job.CaseId}, ${job.FileName})`;
   const t0 = Date.now();
-  checkFileBytes(buffer, mimetype);
+  mimetype = checkFileBytes(buffer, mimetype); // the real type, whatever the extension says
   const body = await extractForApi(buffer, mimetype, job.FileName, job.ClientName, txLog);
   const saved = await api.call('/api/Ocr/SaveOcrResult', {
     OcrReportId: job.OcrReportId, WorkerName: workerName, ...body, ProcessingMs: Date.now() - t0,
@@ -269,10 +276,8 @@ async function processOne(api, workerName) {
   const t0 = Date.now();
   const txLog = createTransactionLog(`ocr${job.OcrReportId}_${job.FileName || 'report'}`);
   try {
-    const mimetype = fileMime(job);
-    if (!mimetype) throw new Error(`Unsupported file type "${job.FileExtension}".`);
     const buffer = await fetchFile(job);
-    await extractAndSave(api, workerName, job, buffer, mimetype, txLog);
+    await extractAndSave(api, workerName, job, buffer, fileMime(job), txLog); // type is checked from the bytes
   } catch (err) {
     console.error(`[${workerName}] FAILED ${label}: ${err.message}`);
     txLog.writeJson('ERROR.json', { ocrReportId: job.OcrReportId, message: err.message, details: err.details || null });
@@ -284,9 +289,8 @@ async function processOne(api, workerName) {
 // ---------- modes ----------
 
 async function dryRun(file) {
-  const mimetype = MIME_BY_EXT[path.extname(file).toLowerCase()];
-  if (!mimetype) throw new Error(`Unsupported file type: ${file}`);
-  const r = await extractForApi(fs.readFileSync(file), mimetype, path.basename(file), process.env.DRY_RUN_CLIENT_NAME || '', null);
+  const buffer = fs.readFileSync(file);
+  const r = await extractForApi(buffer, checkFileBytes(buffer, null), path.basename(file), process.env.DRY_RUN_CLIENT_NAME || '', null);
   const { Rows, RawText, ResultJson, ...header } = r;
   console.log(JSON.stringify({ ...header, Engine: ENGINE, RawTextChars: RawText.length, ResultJsonChars: ResultJson.length, RowCount: Rows.length }, null, 2));
   console.table(Rows.map((x) => ({
@@ -303,9 +307,8 @@ async function dryRun(file) {
 // progress) is the real path. The case needs a digitization record.
 async function manualUpload(file, caseId) {
   const ext = path.extname(file).toLowerCase();
-  const mimetype = MIME_BY_EXT[ext];
-  if (!mimetype) throw new Error(`Unsupported file type: ${file} (pdf / jpg / png / webp).`);
   const buffer = fs.readFileSync(file);
+  checkFileBytes(buffer, null); // fail before queueing anything if it isn't a PDF / image
   const api = createClientFromEnv();
   const workerName = `${os.hostname()}-${process.pid}-manual`.slice(0, 50);
   const fileName = path.basename(file, ext).slice(0, 255);
@@ -316,7 +319,7 @@ async function manualUpload(file, caseId) {
 
     const t0 = Date.now();
     try {
-      const { body } = await extractAndSave(api, workerName, job, buffer, mimetype, createTransactionLog(`ocr${q.OcrReportId}_manual_${fileName}`));
+      const { body } = await extractAndSave(api, workerName, job, buffer, null, createTransactionLog(`ocr${q.OcrReportId}_manual_${fileName}`));
       console.table(body.Rows.map((x) => ({
         type: x.ReportTypeCode, test: x.TestNameRaw, value: x.Value, unit: x.Unit, range: x.RangeRaw, min: x.MinRange, max: x.MaxRange,
       })));
@@ -341,31 +344,7 @@ async function run({ once }) {
     console.log('Stopping after the current report(s)… (Ctrl+C again to force)');
   });
 
-  // Housekeeping, on start and every SWEEP_MINUTES:
-  //  - re-queue reports a crashed worker left PROCESSING
-  //  - the sweep: queue QC-passed pathology files that were never queued
-  //    (cases from before OCR existed, files added after QC) — at most
-  //    SWEEP_MAX per run, so a large backlog is spread over several runs
-  const housekeeping = async () => {
-    try {
-      const r = await api.call('/api/Ocr/RequeueStuckReports', { StuckMinutes: STUCK_MINUTES });
-      if (r && (r.Requeued || r.MarkedFailed)) console.log(`[requeue] ${r.Requeued} re-queued, ${r.MarkedFailed} marked FAILED (stuck > ${STUCK_MINUTES} min)`);
-    } catch (err) {
-      console.error(`[requeue] ${err.message}`);
-    }
-    if (SWEEP_MINUTES <= 0) return;
-    try {
-      const s = await api.call('/api/Ocr/QueueMissedReports', { MaxFiles: SWEEP_MAX });
-      if (s && s.FilesQueued) console.log(`[sweep] ${s.FilesQueued} missed file(s) queued (${s.CasesAdded} new case(s))`);
-    } catch (err) {
-      console.error(`[sweep] ${err.message}`);
-    }
-  };
-  await housekeeping();
-  const housekeepingTimer = setInterval(housekeeping, Math.max(1, SWEEP_MINUTES || 10) * 60 * 1000);
-
-  console.log(`OCR worker: engine=${ENGINE}, version=${PIPELINE_VERSION}, concurrency=${CONCURRENCY}, ` +
-    `sweep=${SWEEP_MINUTES > 0 ? `every ${SWEEP_MINUTES} min, max ${SWEEP_MAX}` : 'off'}, api=${process.env.OCR_API_URL}`);
+  console.log(`OCR worker: engine=${ENGINE}, version=${PIPELINE_VERSION}, concurrency=${CONCURRENCY}, api=${process.env.OCR_API_URL}`);
   const loop = async (i) => {
     const name = `${os.hostname()}-${process.pid}-${i}`.slice(0, 50);
     while (!stopping) {
@@ -380,7 +359,6 @@ async function run({ once }) {
     }
   };
   await Promise.all(Array.from({ length: once ? 1 : CONCURRENCY }, (_, i) => loop(i + 1)));
-  clearInterval(housekeepingTimer);
   await api.close();
 }
 

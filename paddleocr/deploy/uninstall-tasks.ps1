@@ -1,7 +1,7 @@
 <#
   Stops and removes the OCR text service and OCR worker scheduled tasks
   (run as Administrator). A report the worker was processing is re-queued
-  automatically after OCR_WORKER_STUCK_MINUTES once a worker runs again.
+  automatically after 30 min by the MySQL event ev_queue_ocr_reports.
 #>
 $ErrorActionPreference = 'Stop'
 

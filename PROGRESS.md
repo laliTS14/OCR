@@ -1756,6 +1756,55 @@ is OCR'd once.
   (logos, screenshots, an MOU) — no real digital lab PDF. A missing file
   comes back as **HTTP 200 + the frontend's index.html** (SPA fallback),
   so the worker now checks the file's magic bytes before parsing.
+  **Oct 13:** the type now comes from those bytes, not the extension —
+  3 UAT uploads were JPEGs named `.png` and had failed 3× as "not a valid
+  image/png"; re-queued, they went through. Oct 15: any PDF or image is
+  accepted whatever the extension (TIFF / BMP / GIF added; also in the
+  `--file` test modes) — the Blood_Report saved as TIFF-named-.png,
+  BMP-named-.pdf, GIF-named-.jpg and JPEG-named-.webp gave the same 15 rows.
+- **First real lab reports through the full PIMS path, Oct 15:** 15
+  files queued by real QC passes (cases 1388–1395; really 2 distinct
+  uploads: a 3–4-page merged CBC/lipid/KFT/RBS PDF ×3 and a 4-file set —
+  Labsmart CBC+ESR, Drlogy RBS, LFT, KFT — ×3) → all DONE, 167 rows, 119
+  linked to a sub-test, 12 test level only. Parser gaps seen (open, not fixed — fix over a
+  batch via gold-eval, not per report):
+  1. **Labsmart CBC (digital PDF, one word per line):** Hb, RBC, PCV, MCV,
+     MCHC and ESR lost — each has an H/L flag token between name and
+     value; "TOTAL LEUKOCYTE COUNT" and "PLATELET COUNT" came out as
+     `SEM_COUNT` "COUNT" (name split over lines → only "COUNT" left).
+  2. **Lipid ratios mis-coded:** "TOTAL CHOLESTEROL/HDL" → `CHOL` and
+     "TG/HDL" → `HDL` (longest-synonym match on part of the name), so they
+     land on the Total Cholesterol / HDL sub-tests next to the real values.
+  3. **Header empty on all 15** (patient name, lab, dates NULL →
+     name_match_flag NULL) — Labsmart splits the name over lines; Drlogy
+     prints the patient block after the results.
+  4. Units glued into names ("SGPT (ALT) U/I", unit NULL); ALP "11" with
+     no range; footer/letterhead lines saved as OTHER rows.
+- **MySQL scheduler, Oct 15 (applied on UAT):** the database now fills the
+  queue; the worker no longer sweeps (its `OCR_WORKER_SWEEP_*` /
+  `OCR_WORKER_STUCK_MINUTES` settings are gone). Event
+  `ev_queue_ocr_reports` (every 10 min) → `sp_job_queue_ocr_reports`:
+  re-queue reports stuck > 30 min, queue QC-passed pathology files not
+  queued yet (max 200), log the run in `tbl_ocr_job_log`; `GET_LOCK` stops
+  overlapping runs (logged SKIPPED). The two existing SPs were split into
+  internal `sp_run_*` versions (OUT params, no result set) + the old names
+  as API wrappers. Report QC (`sp_update_qc_remark` 3.7.1) still queues
+  instantly — confirmed in real use: QC passes on Oct 14 queued 15 real
+  lab-report PDFs (cases 1388–1395). Tested: the event fired on its own
+  (SUCCESS), a faked stuck report was re-queued, a faked missed file was
+  queued on its existing case (case re-opened), a run under a held lock
+  was SKIPPED, the API wrappers still answer; all test rows restored.
+  Teammate's digitization event (`ev_insert_OCR_digitization_data`) left
+  untouched.
+- **Full UAT run, Oct 13 (OCR tables truncated first):** the sweep queued
+  all 37 QC-passed pathology files (30 cases; 28 more files on 26 cases
+  have not passed QC → not eligible, `digi_id` is required). Result: 32
+  DONE, 5 FAILED — all 5 missing on the report-upload server (one, case
+  1357, has a file_path pointing into case 1298's folder). Cases: 26
+  COMPLETED, 4 FAILED. Only one real lab report among them
+  (`Blood_Report.webp`, case 1046): 14 CBC rows, all mapped to their CBC
+  sub-tests, plus 1 junk header row; the rest are screenshots / photos /
+  an MOU giving OTHER rows (all saved, unmapped).
   `.webp` added (the DC upload screen allows it; Pillow reads it).
 - **OCR-cache bug found (web demo still affected):** `pageReader.js`
   caches OCR'd pages by *file name* only, so two different uploads with

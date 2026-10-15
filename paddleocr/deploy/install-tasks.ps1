@@ -37,7 +37,7 @@ $tasks = @(
     @{ Name = 'Health360 OCR Text Service'; Script = 'run-ocr-service.cmd'; Delay = $null;
        Description = 'RapidOCR text service (paddle_text_service.py, port 8794) for the OCR worker.' },
     @{ Name = 'Health360 OCR Worker'; Script = 'run-worker.cmd'; Delay = 'PT1M';
-       Description = 'OCR worker (worker.js): claims queued pathology reports, extracts them, saves via the OCR API; sweeps for missed reports every 10 min.' }
+       Description = 'OCR worker (worker.js): claims queued pathology reports, extracts them, saves via the OCR API.' }
 )
 
 foreach ($t in $tasks) {

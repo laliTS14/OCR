@@ -258,13 +258,22 @@ report at a time (`api/Ocr/ClaimReport`),
 downloads it, runs `extractDocument()` on everything (`typeIds ['ALL']`),
 and saves the result (`api/Ocr/SaveOcrResult` → `tbl_ocr_data`, one row per
 test, mapped to PIMS tests) or records the failure
-(`api/Ocr/MarkReportFailed`, 3 attempts). Stuck reports are re-queued on
-start and every 10 min (`api/Ocr/RequeueStuckReports`). Tables/SPs live in
-the parent repo: `database/tables/ocr_extraction_tables.sql`,
-`database/tables/ocr_test_mapping.sql`,
+(`api/Ocr/MarkReportFailed`, 3 attempts). Tables/SPs live in the parent
+repo: `database/tables/ocr_extraction_tables.sql`,
+`database/tables/ocr_test_mapping.sql`, `database/tables/ocr_job_log.sql`,
 `database/stored_procedures/ocr_extraction_sps.sql`,
-`database/stored_procedures/ocr_sp_update_qc_remark.sql` (see the parent
+`database/stored_procedures/ocr_sp_update_qc_remark.sql`,
+`database/stored_procedures/ocr_queue_job.sql` (see the parent
 `database.md` / `backend.md`).
+
+**Who fills the queue: the database, not the worker.** Report QC queues
+files the moment it passes; the MySQL event `ev_queue_ocr_reports` (every
+10 min, `sp_job_queue_ocr_reports`) re-queues reports stuck in PROCESSING
+> 30 min and queues QC-passed pathology files that are not queued yet
+(cases from before OCR existed, anything QC missed) — at most 200 per run,
+oldest first — and logs each run in `tbl_ocr_job_log`
+(`SELECT * FROM tbl_ocr_job_log ORDER BY ocr_job_log_id DESC LIMIT 20;`).
+The worker only consumes the queue.
 
 ```bash
 cd paddleocr
@@ -288,14 +297,8 @@ Needs the OCR API running (`dotnet run --project OCR_API/OCR_API.csproj` in
 `REPORT_UPLOAD_BASE_FOLDER` (read from disk on the file server),
 `OCR_WORKER_ENGINE` (`rules` default / `auto` / `llm`),
 `OCR_WORKER_CONCURRENCY` (default 1),
-`OCR_WORKER_POLL_MS` (5000), `OCR_WORKER_STUCK_MINUTES` (30),
-`OCR_WORKER_SWEEP_MINUTES` (10; 0 = off) / `OCR_WORKER_SWEEP_MAX` (200),
+`OCR_WORKER_POLL_MS` (5000),
 `PIPELINE_VERSION` (default `<engine>-<git short hash>`).
-
-**Sweep:** on start and every `OCR_WORKER_SWEEP_MINUTES` the worker calls
-`api/Ocr/QueueMissedReports`, which queues pathology files of QC-passed
-cases that were never queued (cases from before OCR existed, files added
-after QC) — at most `OCR_WORKER_SWEEP_MAX` per run, oldest first.
 
 **Running on a server** (`paddleocr/deploy/`, Windows, no extra tools):
 
@@ -317,9 +320,12 @@ rotation). The `.ps1` / `.cmd` files are kept pure ASCII: Windows
 PowerShell 5.1 reads BOM-less scripts as ANSI, and an em dash once broke
 the parse.
 
-Accepted files: `.pdf`, `.jpg`/`.jpeg`, `.png`, `.webp`. Downloaded bytes are
-checked against the type before parsing — the report-upload site returns
-HTTP 200 with its `index.html` for a missing file.
+Accepted files: any PDF or image (JPEG, PNG, WEBP, TIFF, BMP, GIF —
+first frame only for multi-page TIFF / GIF). The type is taken from the
+downloaded bytes, never the extension (DCs upload JPEG photos named
+`.png`); anything that is neither fails — the report-upload site returns
+HTTP 200 with its `index.html` for a missing file, reported as "File not
+found".
 
 The file name passed to the pipeline is prefixed with the file's sha256,
 because the per-page OCR cache is keyed by file name and DC uploads often
