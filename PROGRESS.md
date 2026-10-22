@@ -1762,24 +1762,105 @@ is OCR'd once.
   accepted whatever the extension (TIFF / BMP / GIF added; also in the
   `--file` test modes) — the Blood_Report saved as TIFF-named-.png,
   BMP-named-.pdf, GIF-named-.jpg and JPEG-named-.webp gave the same 15 rows.
+- **Oct 16 — new UAT DB, Single Group uploads, pathology pages, classifier
+  + parser fixes.**
+  - **UAT moved** to MySQL 8.0 `103.196.76.110:3306 / health360_UAT`
+    (copy of the old DB taken Oct 15 ~09:40). The OCR API still pointed
+    at the old server, which refuses connections → every ClaimReport
+    failed ("failed to claim"). Fixed in `OCR_API/appsettings.json`.
+    MySQL 8 user names are case-sensitive (`health360@%`), so the OCR SQL
+    files no longer hard-code `DEFINER=Health360@%`. The scheduler,
+    job log, split SPs and TGHDL mapping were re-applied there.
+  - **Single Group uploads** (`Group_type_id = 45`: one file with the
+    whole case, `Group_test_type_id` NULL) were never queued — case 1384
+    passed QC and got nothing. Queue rule now (QC SP block 3.7.1 + sweep):
+    `Group_test_type_id = 3` OR `Group_type_id = 45`. MTRF / MER / Special
+    Report group files and identity documents stay out (user decision).
+    The scheduler's first run on the new DB queued 37 Single Group files
+    on 29 cases.
+  - **`pathology_pages`** column on `tbl_ocr_report_details` ("3,4,5"):
+    worker → API `PathologyPages` → `sp_save_ocr_result`.
+  - **Page answer key**: all 279 pages of 26 files (15 insurer case files
+    + 4 other reports + 7 UAT uploads) read and labelled by hand →
+    `review-data/page-key.json`, scored by `page-eval.js`. Before: 142/147
+    pathology pages found, 118/126 non-pathology kept out (ECG reports on a
+    lab letterhead and Aadhaar cards called lab; single-test HIV pages and
+    urine continuation pages missed). Fixes in `pageClassifier.js`
+    (ECG/radiology/ID vocabulary veto, single-test rule, continuation of
+    the previous lab page) → 147/147 and 126/126 — on the same pages the
+    rules came from, so new files are the real test.
+  - **Parser leftovers fixed** (all general, judged by a before/after row
+    snapshot over the same 27 files — no `review-data/gold` keys exist yet):
+    remarks column after the value dropped (11 urine results recovered on
+    3 files), "Not present" added to qualitative values, "unit⇥range"
+    continuation lines, bare `cumm`/`cmm` units (units no longer stuck on
+    names on 5 more files), phone numbers / "End of report" / "Page x of
+    y" never rows, "Cholestrol" misspelling (3 labs) on CHOL/LDL/HDL/VLDL,
+    BUN/Creatinine and Urea/Creatinine ratios. Header: per-cell
+    "Label : value", one-cell-per-line header rebuild (Labsmart now gives
+    name, age, sex, doctor, dates), credential lines block only ID
+    fields (Drlogy age back) — 12 files' headers better, none worse.
+    Totals since Oct 15: rows 1056 → 1064 (junk out — incl. Aadhaar
+    numbers that used to reach tbl_ocr_data — results in), rows with a
+    code 961 → 1001. Copies synced to `unlimited-ocr/`.
+  - **MySQL 8 broke two things, found by the end-to-end run:** (1) every
+    save inserted **0 rows** ("312 malformed row(s) skipped" = 26 rows ×
+    12 fields): the DB default collation `utf8mb4_0900_ai_ci` treats
+    control characters as ignorable, so `LOCATE(CHAR(30), …)` in
+    `sp_save_ocr_result` also matched `CHAR(31)`. Fixed: the split uses
+    `utf8mb4_bin` variables. (2) strict mode rejects a 4-byte character
+    (📞 on a train ticket) in the 3-byte `raw_text` column → the whole save
+    rolled back; `OcrBAL` now strips 4-byte characters from RawText /
+    ResultJson too (row fields already were). Also: that ticket's
+    passenger list had been classified as a lab page (names + ages look
+    like rows) → ticket / railway / salary-slip words added to the
+    non-pathology vocabulary (page key still 100%, no row changes).
+    After the fixes the whole UAT queue was re-processed: 84 DONE, 6
+    FAILED (5 files missing on the report server, 1 old), 843 rows, 686 on
+    a sub-test, 41 files with pathology pages. Case 1384 (Single Group,
+    Babita PDF): pages 1–7 pathology, 63 rows; `name_match_flag = 0` —
+    the report's patient is not the case's client (a test upload).
 - **First real lab reports through the full PIMS path, Oct 15:** 15
   files queued by real QC passes (cases 1388–1395; really 2 distinct
   uploads: a 3–4-page merged CBC/lipid/KFT/RBS PDF ×3 and a 4-file set —
   Labsmart CBC+ESR, Drlogy RBS, LFT, KFT — ×3) → all DONE, 167 rows, 119
-  linked to a sub-test, 12 test level only. Parser gaps seen (open, not fixed — fix over a
-  batch via gold-eval, not per report):
-  1. **Labsmart CBC (digital PDF, one word per line):** Hb, RBC, PCV, MCV,
-     MCHC and ESR lost — each has an H/L flag token between name and
-     value; "TOTAL LEUKOCYTE COUNT" and "PLATELET COUNT" came out as
-     `SEM_COUNT` "COUNT" (name split over lines → only "COUNT" left).
-  2. **Lipid ratios mis-coded:** "TOTAL CHOLESTEROL/HDL" → `CHOL` and
-     "TG/HDL" → `HDL` (longest-synonym match on part of the name), so they
-     land on the Total Cholesterol / HDL sub-tests next to the real values.
-  3. **Header empty on all 15** (patient name, lab, dates NULL →
-     name_match_flag NULL) — Labsmart splits the name over lines; Drlogy
-     prints the patient block after the results.
-  4. Units glued into names ("SGPT (ALT) U/I", unit NULL); ALP "11" with
-     no range; footer/letterhead lines saved as OTHER rows.
+  linked to a sub-test, 12 test level only. Parser gaps it showed:
+  1. **FIXED Oct 15 — CBC flags / split names / look-alike letters.** The
+     Labsmart text layer puts one cell per line, so (a) the H / L flag sat
+     on its own line between name and value and was taken for the test
+     name (Hb, MCV, MCHC, RBC, ESR lost), (b) "TOTAL" ⏎ "LEUKOCYTE" ⏎
+     "COUNT" left only "COUNT" → Sperm Count (WBC, platelets), (c) the font
+     wrote "HЕМАТOCRIT"/"HСТ" with Cyrillic letters (PCV lost). Fixes:
+     `rowParser.js` drops flag-only cells/lines and rejoins trailing short
+     name fragments when that names a known test better (a lone generic
+     word like "COUNT" never counts as a name); `textNormalize.js` folds
+     Cyrillic/Greek look-alikes inside Latin words.
+  2. **FIXED Oct 15 — ratios filed under one of their tests.** Words of
+     "TOTAL CHOLESTEROL/HDL" are those of Total Cholesterol + HDL, so the
+     longest-synonym match picked Total Cholesterol ("TG/HDL" → HDL). Now
+     `matchParam` treats a name as a ratio when it says "ratio", or is
+     "A / B" with A, B different tests of the same report type and no
+     measurement unit — then only ratio entries can match (none → no
+     code). New entry `TGHDL` (TG / HDL Ratio, mapped test-level to Lipid
+     Profile); `ASTALT` also accepts plain "SGOT/SGPT". Known edge: an
+     unit-less "Blood Urea / BUN" now gets no code (urea and BUN are
+     separate entries).
+     **Batch check** (no gold answer key exists yet, so a before/after row
+     snapshot over 27 files: the 15 insurer reports in Downloads/REPORTS,
+     4 other real reports, the 6 UAT uploads, Blood_Report): every changed
+     row is a correction, nothing lost — rows 1056 → 1074, rows with a
+     code 961 → 985. Other labs gained: "SGOT/SGPT" ratio coded on 6
+     reports, "S.Triglycerides/HDL" / "TG/HDL" moved off TG/HDL onto TGHDL
+     on 3. The 15 UAT reports were re-processed: 203 rows, 164 on a
+     sub-test (was 167 / 119). On that CBC "cumm" / "million/cumm" were
+     fixed Oct 16; ESR's "mm for 1st hour" (split over 4 lines) and the
+     WBC range split over 3 lines are still not captured.
+  3. **Header empty on all 15** — FIXED Oct 16 (see that entry): Labsmart
+     now gives name / age / sex / doctor / dates, Drlogy age / sex / PID /
+     doctor (its unlabeled, untitled name "Yash M. Patel" stays unknown).
+  4. Footer/letterhead rows — FIXED Oct 16. Still open: "SGPT (ALT) U/I"
+     (OCR's "U/I" for U/L, one lab — left as is by the design rule); ALP
+     "11" with no range.
 - **MySQL scheduler, Oct 15 (applied on UAT):** the database now fills the
   queue; the worker no longer sweeps (its `OCR_WORKER_SWEEP_*` /
   `OCR_WORKER_STUCK_MINUTES` settings are gone). Event

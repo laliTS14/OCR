@@ -11,7 +11,7 @@
 const UNITS = [
   // counts
   '10^3/ul', '10^6/ul', '10^9/l', '10^12/l', 'x10^3/ul', 'x10^6/ul', 'x10³/ul', 'x10⁶/ul', '10³/ul', '10⁶/ul',
-  'cells/cumm', 'cells/ul', 'cells/mm3', 'cells/cu.mm', '/cumm', '/cu.mm', '/mm3', '/ul', '/l', '/hpf', '/lpf',
+  'cells/cumm', 'cells/ul', 'cells/mm3', 'cells/cu.mm', '/cumm', '/cu.mm', 'cumm', 'cu.mm', 'cmm', '/cmm', '/mm3', '/ul', '/l', '/hpf', '/lpf',
   'lakh/cumm', 'lakhs/cumm', 'lacs/cumm', 'lacks/cumm', 'lakh/ul', 'thou/ul', 'thou/cumm', 'million/ul', 'million/cumm',
   'mill/cumm', 'mil/ul', 'millions/cumm', 'miu/ul', 'milli/cu.mm', 'milli./cu.mm', 'mill/cu.mm', 'million/cu.mm',
   'lakh/cu.mm', 'lakhs/cu.mm', 'lac/cu.mm', 'lacs/cu.mm', 'thou/cu.mm', 'cells/cu.mm',
@@ -27,7 +27,7 @@ const UNITS = [
 // Qualitative results (multi-word phrases allowed). Longest match wins.
 const QUALITATIVE = [
   'non reactive', 'non-reactive', 'nonreactive', 'reactive', 'weakly reactive',
-  'not detected', 'detected', 'not seen', 'seen', 'not found',
+  'not detected', 'detected', 'not seen', 'seen', 'not found', 'not present',
   'negative', 'positive', 'weakly positive', 'equivocal', 'indeterminate', 'borderline',
   'absent', 'present', 'nil', 'trace', 'normal', 'abnormal',
   'clear', 'slightly turbid', 'turbid', 'hazy', 'cloudy',

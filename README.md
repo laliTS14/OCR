@@ -226,6 +226,7 @@ npm start                       # http://localhost:8792 → open /select.html
 node test-extract.js "<file>"   # CLI: pages, patient, every test, validation
 node batch-eval.js "<folder>" --ocr   # whole folder, OCR only where needed
 node gold-eval.js --compare     # accuracy vs the human answer key (review-data/gold/)
+node page-eval.js --verbose     # page classification vs review-data/page-key.json
 ```
 Ollama is only needed for the optional LLM fallback (`engine=auto` when a
 section can't be parsed, or `engine=llm`).
@@ -642,7 +643,16 @@ only filters what's shown:
    `documentParser.js` parses the **whole document** (~10-50ms, no LLM):
    - each page is first classified by `pageClassifier.js` as `lab`,
      `mer`, `other` or `no_text`; only `lab` pages are parsed (the rest are
-     reported in `stages.pages`, MER handling comes later);
+     reported in `stages.pages`, MER handling comes later). A page with
+     ≥ 2 ECG / radiology / ID-document / non-medical words (ECG, QRS, bpm,
+     X-ray, USG, Aadhaar, UIDAI, PAN, PNR, passenger, salary …) and < 2
+     confident rows is `other`, never
+     `lab`; a single-test page (one row + lab wording) is `lab`; an
+     `other` page with lab wording right after a lab page is the same
+     report's continuation → `lab` (`classifyPages()`). The worker stores
+     the lab page numbers in `tbl_ocr_report_details.pathology_pages`.
+     `node page-eval.js [--verbose]` scores this against a hand-checked
+     answer key (`review-data/page-key.json`, 279 pages of 26 files);
    - it's split into blocks at every recognized heading (a short line
      matching a catalog pattern or a generic boundary like a department
      name, with no result-like numbers — so `HbA1c %\t4.8 4.2 - 6.5` is a
@@ -672,6 +682,8 @@ Built on what every lab report shares, not on any one lab's layout:
   `<table>` rows → tab-separated lines; Unlimited-OCR's split tables
   ("test | value" + "unit | range") zipped back together **only when the
   result rows and unit/range rows match one-to-one**, else left alone.
+  Cyrillic / Greek look-alike letters inside Latin words are folded to
+  Latin (some PDF fonts write "HЕМАТOCRIT" with Cyrillic Е М А Т).
 - **`labVocabulary.js`** — the shared vocabulary: units (normalized, so
   `mg / dL` = `MG/DL`), qualitative results (`Non Reactive`, `Not
   Detected`, `Pale Yellow`…), method and specimen lines, reference-range
@@ -686,15 +698,30 @@ Built on what every lab report shares, not on any one lab's layout:
   sequences, ranges continued on following lines *or* printed above the
   value, unit-only lines, notes blocks, and rejects prose/meta lines
   instead of guessing. Returns `needsFallback` when a section parses badly.
-- **`paramDictionary.js`** — 216 standard pathology tests (all 28 panels) with synonyms, unit
+  H / L flag cells and flag-only lines are dropped before parsing (in
+  one-cell-per-line text layers the flag sits between name and value), and
+  a name split over several short lines ("TOTAL" ⏎ "LEUKOCYTE" ⏎ "COUNT")
+  is joined back when that names a known test better than the last line.
+  A remarks column after the value ("Ketones⇥Not present⇥Presence may
+  indicate…") is dropped (a test name is never a sentence); a
+  "unit⇥range" line right after a value is that row's unit and range.
+  Never emitted as rows: a 9+-digit plain number with no unit (phone / ID /
+  PIN on a letterhead) and page furniture ("End of report", "Page 2 of 7").
+- **`paramDictionary.js`** — 217 standard pathology tests (all 28 panels) with synonyms, unit
   families and physically plausible ranges. Used only to label rows
   (`canonical`), disambiguate (Neutrophils % vs absolute), flag implausible
   values (`Hb 136` → possible lost decimal) and score `confidence`; tests
-  not in it are still extracted.
+  not in it are still extracted. A ratio name ("Total Cholesterol/HDL",
+  "TG/HDL", "SGOT/SGPT", anything saying "ratio") only ever matches a
+  ratio entry — never one of the two tests it divides; with no ratio entry
+  it gets no code.
 - **`headerParser.js`** — patient/report fields from `Label : value`,
   `value ⇥ Label`, vertical `Label ⏎ value`, combined `Age / Sex` fields
-  and unlabeled `MR. NAME` / `65 Years /M` lines; skips doctors'
-  signature-block registration numbers.
+  and unlabeled `MR. NAME` / `65 Years /M` lines; each tab cell as its
+  own `Label : value`; skips doctors' signature-block registration numbers
+  (ID fields only — a patient's age/sex printed there still count).
+  One-cell-per-line headers (3+ isolated `:` lines: `Age` ⏎ `/` ⏎ `Sex`
+  ⏎ `:` ⏎ `46` ⏎ `YRS/M`) are rebuilt into `Label : value` lines first.
 
 Row output keeps the shared contract (`test, value, unit, range`) and adds
 optional `canonical`, `param_id`, `confidence` (`high|medium|low`), `flags`.

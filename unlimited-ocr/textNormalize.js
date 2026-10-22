@@ -9,6 +9,10 @@
 //     ONLY when the result rows and the unit/range rows match one-to-one;
 //     otherwise both are left as they are rather than guessed at.
 //   - HTML entities decoded, image placeholders dropped.
+//   - Cyrillic / Greek look-alike letters inside Latin words folded to Latin:
+//     some PDF fonts encode letters with them ("HЕМАТOCRIT" with Cyrillic
+//     Е М А Т, "HСТ"), which stops a name from matching anything. Only
+//     words that also contain a Latin letter are touched; µ is not mapped.
 
 const { UNITS } = require('./labVocabulary');
 
@@ -49,8 +53,19 @@ function zipTables(a, b) {
   return a.map((cells) => (isResultRow(cells) ? [...cells, ...bData[k++]] : cells));
 }
 
+const LOOKALIKE = {
+  А: 'A', В: 'B', Е: 'E', К: 'K', М: 'M', Н: 'H', О: 'O', Р: 'P', С: 'C', Т: 'T', У: 'Y', Х: 'X', І: 'I', Ѕ: 'S',
+  а: 'a', е: 'e', о: 'o', р: 'p', с: 'c', у: 'y', х: 'x', і: 'i', ѕ: 's',
+  Α: 'A', Β: 'B', Ε: 'E', Ζ: 'Z', Η: 'H', Ι: 'I', Κ: 'K', Μ: 'M', Ν: 'N', Ο: 'O', Ρ: 'P', Τ: 'T', Υ: 'Y', Χ: 'X', ο: 'o',
+};
+const LOOKALIKE_CLASS = `[${Object.keys(LOOKALIKE).join('')}]`;
+const HAS_LOOKALIKE = new RegExp(LOOKALIKE_CLASS);
+const ALL_LOOKALIKES = new RegExp(LOOKALIKE_CLASS, 'g');
+const foldLookalikes = (text) => text.replace(/\S+/g, (w) => (/[A-Za-z]/.test(w) && HAS_LOOKALIKE.test(w)
+  ? w.replace(ALL_LOOKALIKES, (c) => LOOKALIKE[c]) : w));
+
 function normalizeReadingText(text) {
-  let out = text.replace(/!\[[^\]]*\]\([^)]*\)/g, '');
+  let out = foldLookalikes(text).replace(/!\[[^\]]*\]\([^)]*\)/g, '');
   if (!/<table/i.test(out)) return out;
 
   const parts = out.split(/(<table[\s\S]*?<\/table>)/i);

@@ -54,14 +54,15 @@ const P = [
   ['EAG', 'Estimated Average Glucose', ['HBA1C'], ['mean plasma glucose', 'estimated average glucose', 'eag', 'average blood glucose', 'avg blood glucose', 'avg blood glucose level', 'average glucose', 'mean blood glucose'], ['mg/dl', 'mmol/l'], null],
 
   // ---- Lipids ----
-  ['CHOL', 'Total Cholesterol', ['LIPID'], ['total cholesterol', 'cholesterol total', 'serum cholesterol', 'cholesterol', 'cholesterol serum'], ['mg/dl', 'mmol/l'], null],
+  ['CHOL', 'Total Cholesterol', ['LIPID'], ['total cholesterol', 'cholesterol total', 'serum cholesterol', 'cholesterol', 'cholesterol serum', 'cholestrol', 'total cholestrol', 'serum cholestrol'], ['mg/dl', 'mmol/l'], null],
   ['TG', 'Triglycerides', ['LIPID'], ['triglycerides', 'triglyceride', 'tg', 'serum triglycerides'], ['mg/dl', 'mmol/l'], null],
-  ['HDL', 'HDL Cholesterol', ['LIPID'], ['hdl cholesterol', 'cholesterol hdl', 'hdl', 'hdl c', 'hdl direct', 'cholesterol hdl direct'], ['mg/dl', 'mmol/l'], null],
-  ['LDL', 'LDL Cholesterol', ['LIPID'], ['ldl cholesterol', 'cholesterol ldl', 'ldl', 'ldl c', 'ldl direct'], ['mg/dl', 'mmol/l'], null],
-  ['VLDL', 'VLDL Cholesterol', ['LIPID'], ['vldl cholesterol', 'vldl', 'cholesterol vldl'], ['mg/dl', 'mmol/l'], null],
+  ['HDL', 'HDL Cholesterol', ['LIPID'], ['hdl cholesterol', 'cholesterol hdl', 'hdl cholestrol', 'hdl', 'hdl c', 'hdl direct', 'cholesterol hdl direct'], ['mg/dl', 'mmol/l'], null],
+  ['LDL', 'LDL Cholesterol', ['LIPID'], ['ldl cholesterol', 'cholesterol ldl', 'ldl cholestrol', 'ldl', 'ldl c', 'ldl direct'], ['mg/dl', 'mmol/l'], null],
+  ['VLDL', 'VLDL Cholesterol', ['LIPID'], ['vldl cholesterol', 'vldl cholestrol', 'vldl', 'cholesterol vldl'], ['mg/dl', 'mmol/l'], null],
   ['NONHDL', 'Non-HDL Cholesterol', ['LIPID'], ['non hdl cholesterol', 'non hdl'], ['mg/dl', 'mmol/l'], null],
   ['CHOLHDL', 'Total Cholesterol / HDL Ratio', ['LIPID'], ['chol hdl ratio', 'chol hdl', 'cholesterol hdl', 'total c hdl c', 'total c hdl c ratio', 'tc hdl c', 'cholesterol hdl ratio', 'total cholesterol hdl ratio', 'tc hdl ratio', 'tc hdl'], ['ratio'], [0.5, 20]],
   ['LDLHDL', 'LDL / HDL Ratio', ['LIPID'], ['ldl hdl ratio', 'ldl hdl', 'ldl chol hdl chol ratio', 'ldl c hdl c ratio', 'ldl cholesterol hdl cholesterol ratio'], ['ratio'], [0.1, 15]],
+  ['TGHDL', 'TG / HDL Ratio', ['LIPID'], ['tg hdl ratio', 'tg hdl', 'triglyceride hdl ratio', 'triglyceride hdl', 'trig hdl ratio'], ['ratio'], [0.1, 30]],
 
   // ---- Kidney ----
   ['CREAT', 'Creatinine', ['KFT'], ['creatinine', 'serum creatinine', 'creatinine serum'], ['mg/dl', 'umol/l'], null],
@@ -69,7 +70,7 @@ const P = [
   ['BUN', 'Blood Urea Nitrogen (BUN)', ['KFT'], ['bun', 'blood urea nitrogen', 'urea nitrogen', 'blood urea nitrogen bun'], ['mg/dl', 'mmol/l'], null],
   ['URIC', 'Uric Acid', ['KFT'], ['uric acid', 'serum uric acid'], ['mg/dl', 'umol/l'], null],
   ['EGFR', 'eGFR', ['KFT'], ['egfr', 'estimated gfr', 'egfr ckd epi', 'gfr'], ['ml/min/1.73sqm', 'ml/min/1.73m2', 'ml/min'], [1, 200]],
-  ['BUNCR', 'BUN / Creatinine Ratio', ['KFT'], ['bun creatinine ratio', 'bun creat ratio', 'urea creatinine ratio'], ['ratio'], null],
+  ['BUNCR', 'BUN / Creatinine Ratio', ['KFT'], ['bun creatinine ratio', 'bun creat ratio', 'urea creatinine ratio', 'bun creatinine'], ['ratio'], null],
   ['CA', 'Calcium', ['KFT'], ['calcium', 'serum calcium', 'calcium serum', 'total calcium'], ['mg/dl', 'mmol/l'], null],
   ['NA', 'Sodium', ['ELECTROLYTE', 'KFT'], ['sodium', 'serum sodium', 'na'], ['meq/l', 'mmol/l'], [90, 200]],
   ['K', 'Potassium', ['ELECTROLYTE', 'KFT'], ['potassium', 'serum potassium', 'k'], ['meq/l', 'mmol/l'], [1, 10]],
@@ -88,7 +89,7 @@ const P = [
   ['ALB', 'Albumin', ['LFT'], ['albumin', 'serum albumin'], ['g/dl', 'gm/dl', 'g/l'], null],
   ['GLOB', 'Globulin', ['LFT'], ['globulin', 'serum globulin'], ['g/dl', 'gm/dl', 'g/l'], null],
   ['AGR', 'A/G Ratio', ['LFT'], ['a g ratio', 'a g', 'albumin globulin ratio', 'albumin globulin a g ratio', 'ag ratio'], ['ratio'], [0.1, 5]],
-  ['ASTALT', 'SGOT / SGPT Ratio', ['LFT'], ['sgot sgpt ratio', 'ast alt ratio', 'de ritis ratio'], ['ratio'], [0.1, 10]],
+  ['ASTALT', 'SGOT / SGPT Ratio', ['LFT'], ['sgot sgpt ratio', 'ast alt ratio', 'de ritis ratio', 'sgot sgpt', 'ast alt'], ['ratio'], [0.1, 10]],
 
   // ---- Thyroid ----
   ['TSH', 'TSH', ['THYROID'], ['tsh', 'thyroid stimulating hormone', 'thyrotropin', 'tsh ultrasensitive', 'thyroid stimulating hormone ultrasensitive'], ['uiu/ml', 'miu/l', 'miu/ml'], [0, 200]],
@@ -147,7 +148,7 @@ const P = [
 
   // Kidney — extra
   ['CYSC', 'Cystatin C', ['KFT'], ['cystatin c'], ['mg/l'], null],
-  ['UREACR', 'Urea / Creatinine Ratio', ['KFT'], ['urea creatinine ratio'], ['ratio'], null],
+  ['UREACR', 'Urea / Creatinine Ratio', ['KFT'], ['urea creatinine ratio', 'urea creatinine'], ['ratio'], null],
 
   // Liver — extra
   ['LDH', 'LDH', ['CARDIAC', 'LFT'], ['ldh', 'lactate dehydrogenase', 'ld'], ['u/l', 'iu/l'], [0, 20000]],
@@ -310,6 +311,10 @@ const PARAMS = P.map(([id, name, types, synonyms, units, plausible]) => ({
   id, name, types, units: units ? units.map(normUnit) : null, plausible,
   synonyms: synonyms.map((s) => ({ tokens: nameTokens(s), text: nameTokens(s).join(' ') })),
 }));
+// A ratio / index of two results (Chol/HDL, A/G, BUN/Creatinine, INR …).
+for (const p of PARAMS) {
+  p.isRatio = /ratio|index/i.test(p.name) || (p.units || []).includes('ratio') || p.synonyms.some((x) => x.tokens.includes('ratio'));
+}
 
 // Best dictionary entry for a printed test name, or null. A synonym matches
 // when ALL its words appear in the name, in any order ("Bilirubin - Direct"
@@ -341,15 +346,39 @@ function unitFamily(u) {
 
 const GENERIC_WORDS = new Set(['count', 'control', 'form', 'volume', 'fat', 'blood', 'reaction', 'consistency', 'cyst', 'parasite', 'motile', 'morphology', 'viscosity', 'protein', 'sugar', 'glucose', 'colour', 'color']);
 
-function matchParam(testName, unit, typeId) {
+// Is this printed name a ratio of two results? "Total Cholesterol/HDL",
+// "TG/HDL", "SGOT/SGPT", "LDL/HDL Ratio". Its words are those of the two
+// tests it divides, so plain word matching files it under one of them
+// ("Total Cholesterol/HDL" → Total Cholesterol). A name is a ratio when it
+// says "ratio", or when it is "A / B" with A and B DIFFERENT tests of the
+// same report type and the row has no measurement unit. "SGOT / AST",
+// "Hematocrit / PCV" (A and B the same test) and "Typhoid IgM/IgG" (not the
+// same report type) are not.
+function isRatioName(testName, unit, typeId) {
+  if (nameTokens(testName).includes('ratio')) return true;
+  const u = normUnit(unit);
+  if (u && u !== 'ratio') return false;
+  const sides = String(testName).split('/');
+  if (sides.length !== 2) return false;
+  const a = matchParam(sides[0], '', typeId, { plain: true });
+  const b = matchParam(sides[1], '', typeId, { plain: true });
+  if (!a || !b || a.param.id === b.param.id || a.param.isRatio || b.param.isRatio) return false;
+  return a.param.types.some((t) => b.param.types.includes(t));
+}
+
+function matchParam(testName, unit, typeId, { plain = false } = {}) {
   const nt = nameTokens(testName);
   if (!nt.length) return null;
   const set = new Set(nt);
   const joined = nt.join(' ');
   const u = normUnit(unit);
   const uf = unitFamily(u);
+  // a ratio is only ever a ratio entry — none known → no match, rather than
+  // filing it under one of the two tests it divides
+  const ratioOnly = !plain && isRatioName(testName, unit, typeId);
   let best = null;
   for (const p of PARAMS) {
+    if (ratioOnly && !p.isRatio) continue;
     const families = p.units ? new Set(p.units.map(unitFamily)) : null;
     for (const syn of p.synonyms) {
       if (!syn.tokens.every((t) => set.has(t))) continue;
@@ -375,4 +404,4 @@ function matchParam(testName, unit, typeId) {
   return best;
 }
 
-module.exports = { PARAMS, matchParam, normUnit, nameTokens };
+module.exports = { PARAMS, matchParam, normUnit, nameTokens, GENERIC_WORDS };

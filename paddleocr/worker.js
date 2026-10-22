@@ -215,6 +215,8 @@ async function extractForApi(buffer, mimetype, fileName, clientName, txLog) {
     PipelineVersion: PIPELINE_VERSION,
     PageCount: triageStage.pages.length,
     OcrPageCount: triageStage.pages.filter((p) => String(p.source).startsWith('ocr')).length,
+    // pages classified as pathology (lab report) — tests come only from these
+    PathologyPages: result.doc.pageTypes.filter((p) => p.type === 'lab').map((p) => p.page).join(',') || null,
     ProcessingMs: Date.now() - t0,
     PatientName: clean(patient.name, 150) || null,
     PatientAge: clean(patient.age, 20) || null,
