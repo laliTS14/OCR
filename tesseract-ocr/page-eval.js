@@ -1,0 +1,53 @@
+// Page-classification accuracy against the hand-checked answer key
+// (review-data/page-key.json — gitignored: file names are patient names).
+//
+//   node page-eval.js            score the current classifier
+//   node page-eval.js --verbose  …and list every wrong page
+//   node page-eval.js --engine tesseract   pages OCR'd by another engine
+//
+// What matters for OCR is lab vs not-lab: a pathology page called
+// something else loses its results; a non-pathology page called lab gets
+// parsed into junk rows. "lab_notes" pages (part of a lab report, but no
+// results: interpretation text, blank body) count as right either way.
+// Reads every file through the OCR page cache (./ocr-cache) — run it after
+// the files have been processed once; uncached scanned pages need
+// the OCR engine's service running.
+const fs = require('fs');
+const path = require('path');
+require('dotenv').config({ quiet: true });
+const { readPages } = require('./pageReader');
+const { parseDocument } = require('./documentParser');
+// --engine <paddle|tesseract> (default OCR_PRIMARY_ENGINE): which OCR engine's pages
+const engIdx = process.argv.indexOf('--engine');
+const ENGINE = require('./ocrEngines').getEngine(engIdx > 0 ? process.argv[engIdx + 1] : require('./ocrEngines').primaryName());
+const cacheDir = ENGINE.cacheDir(__dirname);
+
+const KEY = path.join(__dirname, 'review-data', 'page-key.json');
+
+(async () => {
+  if (!fs.existsSync(KEY)) { console.error(`No answer key at ${KEY}`); process.exit(1); }
+  const key = JSON.parse(fs.readFileSync(KEY, 'utf8'));
+  const verbose = process.argv.includes('--verbose');
+  const t = { labPages: 0, labFound: 0, nonLabPages: 0, nonLabKept: 0, notes: 0 };
+  const wrong = [];
+  for (const [name, { path: file, pages }] of Object.entries(key.files)) {
+    if (!fs.existsSync(file)) { console.log(`skip (missing): ${name}`); continue; }
+    const buf = fs.readFileSync(file);
+    const mime = buf.subarray(0, 1024).toString('latin1').includes('%PDF-') ? 'application/pdf'
+      : buf[0] === 0x89 ? 'image/png' : 'image/jpeg'; // image uploads (photos of reports, ID cards)
+    const r = await readPages(buf, mime, name, { ocr: true, cacheDir, ocrClient: ENGINE.client });
+    const got = Object.fromEntries(parseDocument(r.fullText).pageTypes.map((p) => [p.page, p.type]));
+    for (const [page, want] of Object.entries(pages)) {
+      const isLab = got[page] === 'lab';
+      if (want === 'lab_notes') { t.notes++; continue; }
+      if (want === 'lab') { t.labPages++; if (isLab) t.labFound++; else wrong.push(`${name} p${page}: pathology page classified ${got[page]}`); }
+      else { t.nonLabPages++; if (!isLab) t.nonLabKept++; else wrong.push(`${name} p${page}: ${want} page classified lab`); }
+    }
+  }
+  const pct = (a, b) => (b ? `${((100 * a) / b).toFixed(1)}%` : '-');
+  console.log(`pathology pages found:      ${t.labFound}/${t.labPages} (${pct(t.labFound, t.labPages)})`);
+  console.log(`non-pathology pages kept out: ${t.nonLabKept}/${t.nonLabPages} (${pct(t.nonLabKept, t.nonLabPages)})`);
+  console.log(`lab_notes pages (either ok):  ${t.notes}`);
+  console.log(`wrong: ${wrong.length}`);
+  if (verbose) wrong.forEach((w) => console.log(`  ${w}`));
+})().catch((e) => { console.error(e); process.exit(1); });

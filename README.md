@@ -183,14 +183,30 @@ rules parser (`documentParser.js` + `rowParser.js` + `labVocabulary.js` +
   Both are text only (no layout/table models). The service corrects page
   skew from the text boxes' own angle, then rebuilds reading-order lines,
   turning wide column gaps into tabs, so an OCR'd page looks like a PDF text
-  layer. Node client: `paddleText.js` (same exports as
+  layer. Node client: `ocrClient.js` (one client for every engine's
+  service — same `/ocr` contract; same functions as
   `unlimited-ocr/unlimitedocr.js`); set the same `OCR_ENGINE` for the Node
   app so it uses that engine's cache folder.
+- **OCR engines + double OCR (Oct 22, 2026):** `ocrEngines.js` holds the
+  engine flags — `OCR_PRIMARY_ENGINE` (`paddle` default / `tesseract` /
+  `gemini`), `OCR_ENGINE_{PADDLE,TESSERACT,GEMINI}_ENABLED` (Gemini is a
+  reserved slot, not built) and `OCR_DOUBLE_ENABLED`. A report is
+  **double-OCR'd** only when that master switch is on **and** the report asks
+  for it (`tbl_ocr_report_details.double_ocr = 1`, `--double`, or the
+  "Double OCR" checkbox): its scanned pages are also read by **Tesseract**
+  (`../tesseract-ocr/tesseract_text_service.py`, port 8799), **for
+  comparison only** — RapidOCR's result is still the one saved to
+  `tbl_ocr_data`; Tesseract's own result goes to `tbl_ocr_tesseract_report`
+  / `tbl_ocr_data_tesseract` (`api/Ocr/SaveTesseractResult`), never merged;
+  a Tesseract failure never fails the report (`doubleOcr.js`). Every row
+  carries `ocr_engine` (engine or `TEXT_LAYER`) and `ocr_confidence` (the
+  parser's own). Details: `../tesseract-ocr/README.md`.
 - **Shared code:** the parser/dictionary/catalog/classifier files are copies
   of `unlimited-ocr/`'s — keep the two copies identical when changing either
-  (the only intended differences are `paddleText.js`, `pageReader.js`'s
-  require, `server.js` strings/port, `ollama.js` always using the plain-text
-  prompt, and `test-extract.js`).
+  (the only intended differences are `ocrClient.js`/`ocrEngines.js`,
+  `pageReader.js`'s reading client, `server.js` strings/port, `ollama.js`
+  always using the plain-text prompt, and `test-extract.js`). Every `.js`
+  file and `public/` is also copied, identically, into `../tesseract-ocr/`.
 - **Human review (`reviewStore.js`, `gold-eval.js`):** below the results on
   `/select.html`, a "Review & correct" table lets a reviewer fix any test /
   value / unit / range / report type, delete junk rows, add missed tests and
@@ -224,7 +240,8 @@ cd paddleocr
 npm install
 npm start                       # http://localhost:8792 → open /select.html
 node test-extract.js "<file>"   # CLI: pages, patient, every test, validation
-node batch-eval.js "<folder>" --ocr   # whole folder, OCR only where needed
+node test-extract.js "<file>" --double   # + Tesseract's own result, printed separately (OCR_DOUBLE_ENABLED=true)
+node batch-eval.js "<folder>" --ocr   # whole folder, OCR only where needed (--engine tesseract to compare)
 node gold-eval.js --compare     # accuracy vs the human answer key (review-data/gold/)
 node page-eval.js --verbose     # page classification vs review-data/page-key.json
 ```
@@ -301,23 +318,30 @@ Needs the OCR API running (`dotnet run --project OCR_API/OCR_API.csproj` in
 `OCR_WORKER_POLL_MS` (5000),
 `PIPELINE_VERSION` (default `<engine>-<git short hash>`).
 
-**Running on a server** (`paddleocr/deploy/`, Windows, no extra tools):
+**Running on a server** (`paddleocr/deploy/`, Windows, no extra tools) —
+step-by-step guide from a bare server: `paddleocr/deploy/SERVER_SETUP.md`:
 
 ```powershell
 # elevated PowerShell, after: .venv-rapid set up, npm install, .env pointing at the
 # installed OCR API (backend/Health_360_OCR/deploy/install-service.ps1 → OCR_API_URL=http://localhost:5235)
-.\deploy\install-tasks.ps1          # register + start both
+.\deploy\install-tasks.ps1          # register + start all
 .\deploy\uninstall-tasks.ps1
 Get-ScheduledTask -TaskName 'Health360 OCR*' | Select TaskName, State
 ```
 
-`install-tasks.ps1` registers two Task Scheduler tasks that start at boot as
+`install-tasks.ps1` registers Task Scheduler tasks that start at boot as
 SYSTEM: **Health360 OCR Text Service** (`deploy\run-ocr-service.cmd` →
-`paddle_text_service.py`) and **Health360 OCR Worker**
+`paddle_text_service.py`), **Health360 OCR Tesseract Service**
+(`deploy\run-tesseract-service.cmd` → `../tesseract-ocr/tesseract_text_service.py`,
+port 8799, for double OCR — registered only if `../tesseract-ocr/.venv`
+exists; Tesseract itself must be installed) and **Health360 OCR Worker**
 (`deploy\run-worker.cmd` → `worker.js`, 1 min after boot). Each `.cmd`
 restarts its process 10 s after it exits or crashes; logs go to
-`paddleocr/logs/service/` (`ocr-service.log`, `worker.log`, appended — no
-rotation). The `.ps1` / `.cmd` files are kept pure ASCII: Windows
+`paddleocr/logs/service/` (`ocr-service.log`, `tesseract-service.log`,
+`worker.log`, appended — no rotation). Double OCR also needs
+`OCR_DOUBLE_ENABLED=true` in `.env` and, on UAT, the parent repo's
+`database/stored_procedures/ocr_double_ocr_uat_rollout.sql` (see
+`PROGRESS.md` "UAT go-live"). The `.ps1` / `.cmd` files are kept pure ASCII: Windows
 PowerShell 5.1 reads BOM-less scripts as ANSI, and an em dash once broke
 the parse.
 
@@ -380,6 +404,18 @@ detail, environment gotchas (Python version pinning, an oneDNN CPU crash
 workaround, a RAM-pressure crash on large scanned images), and known
 limitations are in `paddleocr/README.md` — read that before assuming a
 result is trustworthy.
+
+## `tesseract-ocr/` — the paddleocr pipeline on Tesseract; second engine for double OCR (Oct 22, 2026)
+
+Same code as `paddleocr/` (every `.js` file and `public/` copied, kept
+identical) with **Tesseract 5** reading the scanned pages:
+`tesseract_text_service.py` (Flask, port **8799**, same `/ocr` contract as
+`paddle_text_service.py`; psm 6, pages scaled to ~300 dpi, wide gaps → tabs).
+Standalone demo on port 8800 (`OCR_PRIMARY_ENGINE` defaults to `tesseract`
+in this folder), and the service `paddleocr/worker.js` calls as the second
+engine when a report is double-OCR'd. Needs the Tesseract program (UB
+Mannheim Windows build). Full details, flags and how double OCR is stored:
+`tesseract-ocr/README.md`.
 
 ## `azure-llm/` — 4-stage pipeline (Azure OCR + local LLM)
 

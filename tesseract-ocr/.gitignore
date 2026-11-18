@@ -1,0 +1,15 @@
+node_modules/
+.env
+__pycache__/
+*.pyc
+.venv/
+
+# Per-transaction pipeline logs (real patient data — never commit)
+logs/
+
+# Per-page OCR cache (real patient data — never commit)
+ocr-cache/
+
+# Human review corrections + answer key (real patient data — never commit)
+review-data/
+*.log

@@ -3,14 +3,15 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
-const { OCR_ENGINE } = require('./paddleText');
+const { getEngine, primaryName, ocrConfig, doubleOcrFor } = require('./ocrEngines');
+const { extractWithOcrEngines } = require('./doubleOcr');
 const { categorize } = require('./ollama');
 const { validate } = require('./validate');
 const { createTransactionLog } = require('./transactionLog');
 const { identifyReports, getTextForSection } = require('./sections');
 const { REPORT_TYPES, OTHER_TYPE } = require('./reportCatalog');
 const reviewStore = require('./reviewStore');
-const { runTriageAndRead, extractDocument } = require('./pipeline');
+const { runTriageAndRead } = require('./pipeline');
 
 const PORT = process.env.PORT || 8792;
 const ALLOWED_MIME = new Set(['application/pdf', 'image/jpeg', 'image/png']);
@@ -236,6 +237,10 @@ app.post('/api/extract-selected', upload.single('file'), async (req, res) => {
     return res.status(400).json({ error: 'Select at least one report type.' });
   }
   const engine = ['auto', 'rules', 'llm'].includes(req.body.engine) ? req.body.engine : 'auto';
+  // doubleOcr=1: also read the scanned pages with Tesseract, for comparison
+  // (doubleOcr.js; returned separately as stages.tesseract, never merged) —
+  // only when OCR_DOUBLE_ENABLED allows it.
+  const secondEngine = doubleOcrFor(/^(1|true|on)$/i.test(String(req.body.doubleOcr || '')));
 
   const stages = {};
   const txLog = createTransactionLog(`${req.file.originalname}_selected`);
@@ -250,7 +255,7 @@ app.post('/api/extract-selected', upload.single('file'), async (req, res) => {
     // engine=auto (default): rules; the LLM runs only for a block with a
     //   recognized, selected report-type heading that the rules couldn't parse.
     // engine=llm: one categorize() call per selected report-type block.
-    const result = await extractDocument(req.file.buffer, req.file.mimetype, req.file.originalname, { typeIds, engine, txLog });
+    const result = await extractWithOcrEngines(req.file.buffer, req.file.mimetype, req.file.originalname, { primaryEngine: primaryName(), secondEngine, typeIds, engine, txLog });
     const { doc, shownTypes, categorized, removed, validated, ocrDump } = result;
     timings = result.timings;
     stages.triage = result.triageStage;
@@ -274,6 +279,9 @@ app.post('/api/extract-selected', upload.single('file'), async (req, res) => {
     stages.categorized = categorized;
     stages.sourceCheck = { removed };
     stages.validated = validated;
+    stages.ocrEngines = result.ocr; // which engine(s) read the scanned pages
+    // double OCR: Tesseract's own result, as it read the file (comparison only)
+    if (result.secondary) stages.tesseract = { pages: result.secondary.doc.pageTypes.map(({ page, type }) => ({ page, type })), validated: result.secondary.validated };
 
     // ---- Review: saved so a reviewer can correct it (reviewStore.js) ----
     // Each row gets a stable rowId the review screen sends back with its edits.
@@ -330,8 +338,10 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  const paddleUrl = process.env.PADDLE_TEXT_URL || 'http://localhost:8794';
-  console.log(`PIMS PaddleOCR + rules OCR demo running at http://localhost:${PORT}  (main flow: /select.html)`);
-  console.log(`OCR service (${OCR_ENGINE}) expected at ${paddleUrl} — run paddle_text_service.py separately (see README.md); only pages without a usable text layer are OCR'd`);
+  const cfg = ocrConfig();
+  const primary = getEngine(cfg.primary);
+  console.log(`PIMS ${primary.label} + rules OCR demo running at http://localhost:${PORT}  (main flow: /select.html)`);
+  console.log(`OCR service (${primary.label}) expected at ${primary.client.serviceUrl()} — start it separately (see README.md); only pages without a usable text layer are OCR'd`);
+  console.log(`Double OCR: ${cfg.secondary ? `available per upload (second engine ${getEngine(cfg.secondary).label} at ${getEngine(cfg.secondary).client.serviceUrl()})` : 'off'}${cfg.problems.length ? `  — ${cfg.problems.join(' ')}` : ''}`);
   console.log(`Ollama: ${process.env.OLLAMA_URL || 'http://localhost:11434'}  categorize=${process.env.CATEGORIZE_MODEL || process.env.OLLAMA_MODEL || 'llama3.2:3b'}`);
 });

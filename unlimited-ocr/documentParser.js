@@ -112,7 +112,7 @@ function parseDocument(ocrDump) {
     const g = groups.get(gk);
     if (e.heading) g.headings.add(e.heading);
     g.pageNumbers.add(e.page);
-    g.rows.push(e.row);
+    g.rows.push({ ...e.row, page: e.page }); // the page this row was read from
   }
   const reports = [...groups.values()].map((g) => ({
     ...g,

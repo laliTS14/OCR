@@ -197,6 +197,7 @@
       <option value="rules">Rules only (no AI)</option>
       <option value="llm">AI only</option>
     </select>
+    <label class="file-chip" title="Also read scanned pages with Tesseract, for comparison: its result comes back separately (stages.tesseract in the response), the result below stays RapidOCR's (needs OCR_DOUBLE_ENABLED=true on the server)"><input type="checkbox" id="doubleOcr"> Double OCR</label>
     <button class="btn btn-primary" id="runBtn" type="button" disabled>Extract selected</button>
   </div>
 
@@ -317,6 +318,7 @@
     formData.append('file', chosenFile);
     formData.append('reportTypes', JSON.stringify(types));
     formData.append('engine', engine);
+    if (document.getElementById('doubleOcr').checked) formData.append('doubleOcr', '1');
     try {
       var res = await fetch('/api/extract-selected', { method: 'POST', body: formData });
       var payload = await res.json();
@@ -421,6 +423,7 @@
             (row.canonical && row.canonical.toLowerCase() !== String(row.test).toLowerCase() ? '<div style="font-weight:400; font-size:0.74rem; color:var(--ink-faint);">' + escapeHtml(row.canonical) + '</div>' : '') +
             (row.flags ? '<div style="font-weight:600; font-size:0.74rem; color:var(--crit);">' + escapeHtml(row.flags.join('; ')) + '</div>' : '') +
             (row.confidence && row.confidence !== 'high' ? '<div style="font-weight:400; font-size:0.72rem; color:var(--warn);">' + escapeHtml(row.confidence) + ' confidence</div>' : '') +
+            (row.ocr_engine ? '<div style="font-weight:400; font-size:0.72rem; color:var(--ink-faint);">' + escapeHtml(row.ocr_engine) + '</div>' : '') +
           '</td>' +
           '<td class="mono">' + escapeHtml(row.value) + '</td>' +
           '<td class="mono">' + escapeHtml(row.unit) + '</td>' +

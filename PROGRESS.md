@@ -1582,6 +1582,318 @@ heading line was being parsed as a test name; `documentParser.js` and
 rec model is PP-OCRv3 (older than PaddleOCR's v5) — equal on these files;
 keep an eye on it as more labs are added (`batch-eval.js` with each engine).
 
+## New sample data: 275 unseen files through the current pipeline (Oct 23, 2026)
+
+Inventory of the two sample folders (`Downloads/REPORTS/REPORTS`,
+`D:/Samples reports` — Alp_samples + HSP-samples): 822 files, **312 distinct
+by content** (insurer folders under `Sample Reports` are mostly copies of
+`All Reports`; `HSP-samples/REPORTS` = `Downloads/REPORTS`). 31 had been
+through the current pipeline, 5 only through older demos, 1 unclear, **275
+new** (128 PDFs, 147 images). Per-file lists (gitignored — patient names):
+`paddleocr/review-data/sample-inventory.csv`, `new-samples-results.csv`.
+
+Current pipeline (rules only, RapidOCR) over the 275: **80 min, 0 errors**,
+1056 pages (909 OCR'd). 87 files had lab pages with rows; checked by hand
+from their rows:
+- **68 real pathology reports**: 2585 rows, **2355 matched a dictionary test
+  (91 %)** — CBC 677, urine 666, LFT 419, lipid 282, KFT 130, HbA1c 108 …;
+  `Reemanshu.PDF` is a real pathology page read too garbled for any test.
+- **18 misclassified as lab** (all rows junk, 0 dictionary matches) +
+  `Seema Meena TMT` (1/20): **TMT / ECG / 2D-echo reports (11)** — their
+  stage/ST-level tables look like result rows — **ID cards (7)** (Aadhaar
+  photos and scans: "VID 9155 = 1652", PIN codes) and 1 MER form. The Oct 16
+  page-key fixes (100 % on the 26 files they came from) did not hold on new
+  files for these two kinds — **fixed the same day, below.**
+- 188 files had no lab page (MER forms, TMT/ECG, X-ray, photos, ID proofs)
+  — not checked one by one.
+
+**Classifier fix (Oct 23).** Every misclassified page had reached 'lab'
+through one rule — "≥ 2 rows" — with no confident row and no lab wording:
+TMT stage tables, ECG lead values and Aadhaar digit groups parse as 2-3
+uncertain rows. Measured first: none of the key's 147 real lab pages relied
+on it (all have a confident row, or lab vocabulary). Changes in
+`pageClassifier.js`:
+- 'lab' needs a confident row, ≥ 3 lab words, or ≥ 1 row **and** ≥ 1 lab word
+  (was: ≥ 2 rows of any kind, or ≥ 1 row and ≥ 2 lab words);
+- general non-pathology vocabulary added: TMT/ECG (bruce, METS, ST level /
+  slope, post J, target HR, linked medians, sinus rhythm, ex start, peak ex),
+  echo measurements (LVID, LVPW, IVS), Aadhaar (Government of India,
+  enrolment no, VID), contracts (agreement, hereinafter, indemnify,
+  non-exclusive, empanel).
+Page key extended: 76 hand-read pages of 26 new files (TMT/ECG/echo,
+Aadhaar, an HSP agreement, ultrasound; 2 real lab pages of `Reemanshu.PDF`)
+— only the pages read are listed. `page-eval.js` now also reads image files,
+and `pageReader.js` caches an image's OCR like a PDF page.
+**Judged over everything:** key 149/149 pathology + **126/200 → 199/200**
+non-pathology (left: one garbled TMT chart with a confident-looking row);
+the 26 original key files' rows identical; the 275 new files: dictionary-
+matched rows **2355 → 2355**, 211 junk rows gone; the only pages lost from
+real reports were an ECG, 4 Aadhaar cards, a TMT trace and 2 ultrasound
+pages inside case files (all checked). Copied to `unlimited-ocr/` and
+`tesseract-ocr/`.
+
+## Double OCR redone as comparison only (Nov 2, 2026)
+
+Decision (user): not every report is double-OCR'd, and double OCR is **for
+show** — store Tesseract's result next to RapidOCR's, like it, but never merge.
+Everything else stays single OCR with RapidOCR. Choices made with the user:
+separate tables; no merge and no comparison in code; a Tesseract failure
+never fails the report; DB only (no UI) for now.
+- `paddleocr/doubleOcr.js` rewritten: the primary result is returned exactly
+  as before (rows tagged with their engine + the parser's own confidence);
+  for a double-OCR report the second engine's full result comes back
+  separately (`result.secondary`), its failure as `ocr.secondaryError`. The
+  Oct 22 merge (HIGH/MEDIUM, better-validating value, junk filter, page-pairing)
+  is **removed**.
+- `worker.js`: `SaveOcrResult` exactly as before (now `SecondOcrEngine` is
+  always null), then `SaveTesseractResult` with Tesseract's own pages,
+  patient, raw text, JSON and tests — DONE, FAILED (+ error), or DONE with 0
+  tests and a remark for a digital PDF. Errors saving it are logged only.
+- Parent repo: new `tbl_ocr_tesseract_report` + `tbl_ocr_data_tesseract`
+  (`database/tables/ocr_tesseract_result_tables.sql`),
+  `sp_save_ocr_tesseract_result`
+  (`database/stored_procedures/ocr_tesseract_result_sps.sql`), OCR API
+  `POST api/Ocr/SaveTesseractResult` (DO / BAL / DAL / controller; builds, 0
+  errors). Digitization's SPs read only `tbl_ocr_data`, so nothing changes
+  for them.
+- Tested (dry runs, `worker.js --file … --double`): no flag / master switch
+  off → Tesseract never runs; Sonu Tata → RapidOCR 52 rows unchanged +
+  Tesseract DONE 56 rows (its own "387" Lymphocytes, "4.31" A/G); Tesseract
+  service down → RapidOCR result + Tesseract FAILED; digital PDF → Tesseract
+  DONE, 0 rows, remark.
+- **Tested end to end on `health360_dev` (Nov 3–5)**: the user applied the
+  SQL there; a local build of the OCR API pointed at `health360_dev`
+  (`worker.js --file … --case 1534 [--double]`). The flow works:
+  - Report 170, single OCR: 48 rows, Tesseract never ran. Report 171, double
+    OCR: RapidOCR 19 rows, Tesseract DONE with 16 rows. Report 172, Tesseract
+    service down: RapidOCR result saved, Tesseract FAILED. Report 173, master
+    switch off: Tesseract never ran. Report 174, digital PDF: Tesseract DONE,
+    0 rows, with a remark.
+  - All 71 PDFs in `D:\Dummy Reports` with double OCR (reports 175–245,
+    case 1534, 1 150 OCR'd pages, about 1.5–2.5 min per uncached file):
+    71/71 DONE, 71/71 Tesseract DONE, 0 failures, `second_ocr_engine_id` =
+    TESSERACT on all of them.
+  - Rows: RapidOCR 2 702 (2 287 mapped to PIMS tests), Tesseract 2 801.
+  - Per test (report + `param_code`, 2 493 tests):
+    - 2 054 had the same value from both engines: **96 % agreement** where
+      both engines found the test.
+    - 86 had different values. In 20 of them Tesseract dropped the decimal
+      point ("32.6" → "326"); in 0 did RapidOCR. The rest are mostly
+      Tesseract misreads ("15.6" → "13.6", "1.025" → "21.025"). A few are
+      RapidOCR rows taking a range as the value (CHOL "<200", LDL "<130")
+      → worth a look in the rules parser.
+    - 216 were found only by RapidOCR and 137 only by Tesseract.
+  - 9 reports had 0 RapidOCR rows (no lab pages). On 3 of them (198, 226,
+    243) Tesseract saved 1–10 junk rows read from ECG/graph pages it took
+    for lab pages. They sit only in the comparison tables.
+  - **Dharani DC batch (Nov 5–6)**: 54 PDFs from `D:\dharani dc dummy
+    reports`, one lab template, 1 452 OCR'd pages. Reports 248–302 on case
+    1534; 296 is FAILED, re-run as 302.
+    - Result: 54/54 DONE, 54/54 Tesseract DONE.
+    - Report 296 hung about 15 h, most likely because the laptop slept. The
+      API's stuck sweep marked it FAILED, so the worker's late save was
+      refused ("not claimed by this worker"). Re-run as 302; not a
+      double-OCR bug.
+    - Rows: RapidOCR 2 394 (2 045 mapped), Tesseract 2 556.
+    - Per test, 2 128 tests: 1 936 had the same value (**97.6 %** of the
+      tests both engines found), 47 had different values, 82 were found
+      only by RapidOCR and 63 only by Tesseract.
+    - **Accuracy, hand-checked against the page images** (Budda Subbaiah =
+      report 252, Pagadala Sambaiah = 269; 95 real results):
+
+      | | Correct | Wrong value | Missed |
+      |---|---|---|---|
+      | RapidOCR | 90 / 95 (94.7 %) | 1 | 4 |
+      | Tesseract | 85 / 95 (89.5 %) | 4 | 6 |
+
+      Every value where both engines agreed was correct. Tesseract's errors
+      are dropped decimal points (TP 7.2 → 72, RBC 5.1 → 51, TG/HDL 2.12 →
+      212) and a range read as the value (HDL ">40.00"). RapidOCR's error:
+      HBsAg "688" instead of "Negative(-)ve".
+    - Found in the hand-check (open, parser/classifier side, affects single
+      OCR too):
+      1. **Fixed Nov 6.** Many Dharani PDFs have a GPS-camera photo of the
+         patient in front of the lab's **price board**, and the classifier
+         called it a lab page: prices became results (INSULIN 1300, HBsAg
+         500). Report 255 has only this page.
+         - New general rule in `pageClassifier.js`: a "menu line" is a line
+           with two or more "test name + round price" pairs ("IRON 500
+           LIPASE 700") and no range. A page with ≥ 5 of them is a price
+           list / test menu → `other`. It is checked before the lab rules,
+           because prices parse as confident rows.
+         - All 8 717 cached pages (every engine and sample set): only
+           price-board photos have ≥ 2 menu lines. RapidOCR has 11–27 on
+           each of 5 pages; Tesseract 13 and 23 on 2 pages, plus 2 garbled
+           ones (1–2 lines) it cannot catch. No real lab page has more
+           than 1.
+         - Page key unchanged: 149/149 pathology pages found, 199/200
+           non-pathology kept out. The 71-file Dummy folder is unchanged
+           row for row.
+         - Dharani batch: 82 RapidOCR and 37 Tesseract junk rows removed,
+           no real result lost. Side effects: HbA1c in Syamala Sujatha
+           now gets its correct page (15, was 12); 1 new junk row there
+           (CHOL "68.0" from a footnote sentence plus a garbled logo line,
+           item 5).
+         - Copied identically to `tesseract-ocr/` and `unlimited-ocr/`.
+         - The rows already saved in `health360_dev` are not re-run.
+      2. Only the first row of the HIV 1 & 2 block is read; HIV 2 and the
+         final result are missed.
+      3. MCHC is mapped to HB.
+      4. The test on a one-test page is saved with an earlier page number
+         (FBS on page 19 saved as page 17); the value is right.
+      5. A few footnote rows: "Gender = Normal", "Certain medications =
+         68", a second HbA1c row "<5.7" taken from the range.
+  - Fixed Nov 5: `sp_save_ocr_tesseract_result` used to set
+    `second_ocr_engine_id` = TESSERACT even for a digital PDF Tesseract had
+    nothing to read; now only on DONE with `p_ocr_page_count > 0`. Applied
+    on `health360_dev`. Checked: report 246 (digital PDF) is NULL; report 247
+    (7 OCR'd pages) is TESSERACT.
+  - Dev test data (reports 170–302 on case 1534) is still there.
+  - UAT rollout: see "UAT go-live" below.
+- Note: the parent repo's `database/` folder was restructured (per-table
+  dumps) since Oct 22 — the Oct 22 scripts (`ocr_double_ocr.sql`, edits to
+  `ocr_extraction_sps.sql`) are gone from disk; their schema is in the dump
+  (`double_ocr`, `ocr_engine_id`, `second_ocr_engine_id`, `confidence`,
+  `confidence_note`, lookup `OcrEngine`). The worker SPs' new signatures are
+  not in the dump, so they can't be confirmed from the repo.
+
+## Double OCR: Tesseract as a second engine (Oct 22, 2026)
+
+*Superseded Nov 2: the merge described here was removed — see "Double OCR
+redone as comparison only" above. The engine flags, Tesseract service and the
+measurements below still hold.*
+
+Decision (user): build Tesseract as its own approach in a new folder
+(`tesseract-ocr/`), keep the classification / parsing logic unchanged, and
+add **double OCR** for chosen reports: read the scanned pages with two
+engines and keep, per test, the value they agree on. Decisions taken with
+the user:
+- **Engine flags** (`paddleocr/ocrEngines.js`, `.env`): `OCR_PRIMARY_ENGINE`
+  (paddle / tesseract / gemini), `OCR_ENGINE_{PADDLE,TESSERACT,GEMINI}_ENABLED`
+  (Gemini = reserved slot, not built — choosing it is refused),
+  `OCR_DOUBLE_ENABLED`. The second engine for double OCR is **always
+  Tesseract**.
+- **Double OCR is per report:** global master switch **and** a per-report
+  flag (`tbl_ocr_report_details.double_ocr`, default 0 — set by hand for now;
+  `--double` on the CLI tools; checkbox on `/select.html`).
+- **Merge** (`paddleocr/doubleOcr.js`): both readings go through the same
+  pipeline; rows paired by page + dictionary test (or a near-identical name,
+  so one engine misreading a letter doesn't split a test in two). Same value
+  → HIGH, engine `PADDLE_TESSERACT`; different values → the row that
+  validates better (parser confidence, flags, range parsed, value checkable),
+  MEDIUM, note with the other value; only one engine found it → MEDIUM.
+  Text-layer pages are never compared (`TEXT_LAYER`); a fully digital PDF
+  never runs the second engine.
+- **Engine recorded in the DB** as lookup `OcrEngine` (PADDLE, TESSERACT,
+  GEMINI, PADDLE_TESSERACT, GEMINI_TESSERACT, TEXT_LAYER): per row
+  `tbl_ocr_data.ocr_engine_id` + `confidence` (re-added; HIGH/MEDIUM/LOW) +
+  `confidence_note`; per report `ocr_engine_id` / `second_ocr_engine_id`.
+  Parent repo: `database/tables/ocr_double_ocr.sql`, SPs updated
+  (`sp_claim_ocr_report` → DoubleOcr, `sp_save_ocr_result` 15 fields per row
+  + engines, `sp_insert_ocr_manual_report` p_double_ocr), OCR API DOs / BAL /
+  DAL updated (builds, 0 errors).
+
+Built: `tesseract-ocr/` (`tesseract_text_service.py`, port 8799, same `/ocr`
+contract as `paddle_text_service.py`: Tesseract 5 LSTM eng, psm 6, scale to
+2400 px, gaps → tabs; every `.js` copied from `paddleocr/`, identical; demo
+on 8800). `paddleText.js` → `ocrClient.js` (one client for every engine);
+`pageReader.js` / `pipeline.js` take the engine; `documentParser.js` now puts
+the row's page on each row (copied to `unlimited-ocr/`); worker, server,
+`test-extract.js`, `batch-eval.js`, `page-eval.js` take an engine / `--double`.
+
+Checked: the refactor changed **nothing** in paddleocr's output — 26 files of
+the page key, 1050 rows, identical text fields before/after (committed HEAD
+vs. new code, same OCR cache); `page-eval.js` still 147/147 + 126/126; the
+merge rules on synthetic rows (agree, misread name, disagreement → better
+validation wins, one-engine-only, text layer) behave as above.
+**First real run (Oct 22, same day — Tesseract 5.5.3 installed at
+`C:\tesseract-ocr`, which the service now also looks in).** All 26 files of
+the page key (23 with scanned pages, 189 OCR'd pages), PaddleOCR (RapidOCR)
+primary + Tesseract second:
+- **Speed:** Tesseract **1.2 s/page** (vs RapidOCR ~6.6 s/page) — double OCR
+  adds ~20 % to a scan's reading time.
+- **Tesseract alone:** 1054 rows, **903 with a dictionary code** (PaddleOCR:
+  1050 / 987). Weak spot: values in **bordered table cells / handwritten
+  entries** — `ANISHA TATA` gave 1 row vs PaddleOCR's 30 (it drops the cell
+  values, keeps the printed labels). Clean printed scans (Sonu, Shubham,
+  Kalpesh, Vinod) agree almost completely.
+- **Double OCR, rows on OCR'd pages** (440 from PaddleOCR): **319 agree
+  (72 %, HIGH)**, 15 disagree, 106 only PaddleOCR found (MEDIUM — mostly the
+  bordered-cell files above), 9 only Tesseract found and kept (dictionary
+  tests PaddleOCR missed); **93 Tesseract-only junk rows dropped**.
+- **Disagreements resolved:** 14 of 15 kept the plausible value — e.g.
+  Lymphocytes 37 vs Tesseract "387", A/G 1.31 vs "4.31", PCV 48 vs "8", Uric
+  Acid Tesseract 3.46 kept over PaddleOCR "46" (the one real PaddleOCR misread
+  in the set). The 15th is a duplicate HDL row both engines garbled (Vinod, a
+  shifted lipid table). Judged by plausibility against ranges/units — not
+  checked against the page images.
+- Fixes this run forced in `doubleOcr.js` (general, not per report): (1) rows
+  only carry their section's first page and the two readings can start a
+  section on different pages → pairing now also matches the same test **one
+  page away** (Sonu's whole lipid panel was duplicated before); (2) rows
+  **only Tesseract** found are kept only if the dictionary knows the test —
+  otherwise dropped (letterhead, address, "MBBS 4", garbled lines; listed in
+  `ocr.stats.secondaryOnlyDropped`) — a refinement of "one engine only →
+  MEDIUM" for the second engine; (3) a recognised result word ("Negative",
+  "Pale Yellow") scores like a range-checked number (HIV "Negative" had lost
+  to a stray "2" from "2nd"; "2+" kept as a grade, not "2").
+- **Layout mode:** psm 4 vs the default psm 6 over the same batch: same
+  agreement (319), less junk (22 dropped vs 93), better on some files and
+  worse on others → **default stays psm 6**; psm 4 found every value of
+  ANISHA p1 in isolation but only 2 more agreeing rows over the whole file.
+  The psm 4 page cache is kept in `paddleocr/ocr-cache/tesseract-psm4/`.
+
+**UAT go-live (Nov 18):** steps 1–2 done by the user (checked: UAT's
+schema and the 4 procedures now byte-identical to dev; API live at
+`http://192.168.40.45:8012/` with `SaveTesseractResult`, 401 without a key,
+the worker's key accepted). Next: step 3 on a server —
+`paddleocr/deploy/SERVER_SETUP.md` (new; `paddleocr/requirements-rapid.txt`
+added and checked in a fresh venv: installs, boots, reads a real page). The
+frontend and main PIMS backend need no change: double OCR has no UI, and
+digitization's SPs are untouched.
+
+Before the rollout UAT had only the `OcrEngine` lookup; missing were
+`double_ocr` / `ocr_engine_id` / `second_ocr_engine_id` (report),
+`ocr_engine_id` / `confidence` / `confidence_note` (data), the two Tesseract
+tables, `sp_save_ocr_tesseract_result`, and the dev versions of
+`sp_claim_ocr_report`, `sp_insert_ocr_manual_report`, `sp_save_ocr_result`
+(21 parameters; the new API sends 23).
+
+Order (the new API calls the new `sp_save_ocr_result`, so the DB goes first;
+the new worker also works against the old API — it then just never
+double-OCRs):
+1. **SQL** — parent repo
+   `database/stored_procedures/ocr_double_ocr_uat_rollout.sql`, generated from
+   `health360_dev`: adds the 6 columns if missing, creates the 2 tables if
+   missing, re-creates the 4 procedures (no DEFINER). Run in Workbench or
+   `mysql --comments --default-character-set=utf8mb4` (the plain client
+   strips procedure comments / mangles non-ASCII). Proven on dev Nov 18:
+   no errors, procedures byte-identical afterwards. (While building it a
+   first, broken version dropped `sp_claim_ocr_report` on dev for a few
+   minutes — restored from `dev_sp.sql`, hash-checked identical.)
+2. **OCR API** — publish `backend/Health_360_OCR` (builds, 0 errors) with
+   `health360_uat` in `appsettings.json`; `deploy/install-service.ps1` on a
+   server, or run it as before.
+3. **Worker machine** (full guide: `paddleocr/deploy/SERVER_SETUP.md`) —
+   Tesseract installed (UB Mannheim build),
+   `tesseract-ocr/.venv` set up, then `paddleocr/deploy/install-tasks.ps1`:
+   it now also registers "Health360 OCR Tesseract Service"
+   (`deploy/run-tesseract-service.cmd`, port 8799; skipped if the venv is
+   missing — tested by hand Nov 18). `paddleocr/.env`:
+   `OCR_DOUBLE_ENABLED=true` (`.env.example` now lists every worker setting).
+4. **Pick reports** — nothing sets `double_ocr` automatically. For testing:
+   `UPDATE tbl_ocr_report_details SET double_ocr = 1, ocr_status_id = <QUEUED>,
+   attempt_count = 0, locked_by = NULL, error_message = NULL WHERE
+   ocr_report_id IN (...)` (a re-run replaces the report's earlier rows), or
+   `node worker.js --file <pdf> --case <id> --double`.
+5. **Check** — `tbl_ocr_tesseract_report` (DONE / FAILED per report) and the
+   per-test comparison of `tbl_ocr_data` vs `tbl_ocr_data_tesseract` on
+   `ocr_report_id` + `param_code`.
+
+Open: Tesseract on bordered/handwritten tables (preprocessing such as
+table-line removal is the obvious next experiment); a rule for which
+reports get double OCR.
+
 ## Automatic processing: sweep + services (Oct 12, 2026)
 
 Decision: no MySQL event scheduler — events can only run SQL (the work
@@ -2176,6 +2488,12 @@ sections → `needsFallback` (LLM or review), not wrong rows; `Hb 136 g/dL`
   go to the LLM fallback / review rather than being corrected.
 
 ## Suggested next steps, roughly in order
+
+- **(Oct 22) Double OCR:** measured (72 % of OCR'd tests agree, 14/15
+  disagreements resolved plausibly, Tesseract 1.2 s/page). Next: the UAT
+  rollout (prepared Nov 18 — SQL script, deploy scripts; see "UAT
+  go-live"), decide which reports get `double_ocr = 1`; then Tesseract
+  preprocessing for bordered tables.
 
 0. **Fix categorization before trusting any further accuracy numbers**
    (see "Categorization confirmed as the real bottleneck" above — this

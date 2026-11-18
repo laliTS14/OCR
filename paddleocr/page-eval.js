@@ -3,6 +3,7 @@
 //
 //   node page-eval.js            score the current classifier
 //   node page-eval.js --verbose  …and list every wrong page
+//   node page-eval.js --engine tesseract   pages OCR'd by another engine
 //
 // What matters for OCR is lab vs not-lab: a pathology page called
 // something else loses its results; a non-pathology page called lab gets
@@ -10,13 +11,16 @@
 // results: interpretation text, blank body) count as right either way.
 // Reads every file through the OCR page cache (./ocr-cache) — run it after
 // the files have been processed once; uncached scanned pages need
-// paddle_text_service.py running.
+// the OCR engine's service running.
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ quiet: true });
 const { readPages } = require('./pageReader');
 const { parseDocument } = require('./documentParser');
-const cacheDir = require('./paddleText').ocrCacheDir(__dirname);
+// --engine <paddle|tesseract> (default OCR_PRIMARY_ENGINE): which OCR engine's pages
+const engIdx = process.argv.indexOf('--engine');
+const ENGINE = require('./ocrEngines').getEngine(engIdx > 0 ? process.argv[engIdx + 1] : require('./ocrEngines').primaryName());
+const cacheDir = ENGINE.cacheDir(__dirname);
 
 const KEY = path.join(__dirname, 'review-data', 'page-key.json');
 
@@ -28,7 +32,10 @@ const KEY = path.join(__dirname, 'review-data', 'page-key.json');
   const wrong = [];
   for (const [name, { path: file, pages }] of Object.entries(key.files)) {
     if (!fs.existsSync(file)) { console.log(`skip (missing): ${name}`); continue; }
-    const r = await readPages(fs.readFileSync(file), 'application/pdf', name, { ocr: true, cacheDir });
+    const buf = fs.readFileSync(file);
+    const mime = buf.subarray(0, 1024).toString('latin1').includes('%PDF-') ? 'application/pdf'
+      : buf[0] === 0x89 ? 'image/png' : 'image/jpeg'; // image uploads (photos of reports, ID cards)
+    const r = await readPages(buf, mime, name, { ocr: true, cacheDir, ocrClient: ENGINE.client });
     const got = Object.fromEntries(parseDocument(r.fullText).pageTypes.map((p) => [p.page, p.type]));
     for (const [page, want] of Object.entries(pages)) {
       const isLab = got[page] === 'lab';

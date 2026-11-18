@@ -1,8 +1,9 @@
 // Per-page reading: every page of a PDF is read the cheapest way that
 // works. Pages with a usable text layer (triage.pageTextUsable) are taken
 // directly — free, instant, exact; ONLY pages without one (scanned pages,
-// garbled embedded OCR layers) are sent to the OCR service (paddle_text_service.py —
-// RapidOCR by default, ~7.5 s/page on this CPU). A mixed "scanned MER + digital lab report" PDF therefore only
+// garbled embedded OCR layers) are sent to the OCR engine's service
+// (ocrEngines.js: paddle_text_service.py — RapidOCR, ~7.5 s/page on this
+// CPU — or ../tesseract-ocr/tesseract_text_service.py). A mixed "scanned MER + digital lab report" PDF therefore only
 // OCRs its scanned pages.
 //
 // Output uses one page-marker format for every page ("--- Page N of M ---",
@@ -10,22 +11,32 @@
 // classification / parsing doesn't care how each page was read.
 //
 // Optional per-page OCR cache (cacheDir): <cacheDir>/<file>.p<N>.txt — a
-// page is never OCR'd twice.
+// page is never OCR'd twice. Each engine has its own cacheDir.
+//
+// ocrClient: which OCR engine reads the pages (ocrEngines.getEngine(name)
+// .client); default = the primary engine from .env.
 
 const fs = require('fs');
 const path = require('path');
 const { triagePages, textQuality, MIN_CLEAN_WORD_RATIO } = require('./triage');
-const { ocrPdfPages } = require('./paddleText');
 const { classifyPage } = require('./pageClassifier');
 const { normalizeReadingText } = require('./textNormalize');
+const { getEngine, primaryName } = require('./ocrEngines');
 
-async function readPages(fileBuffer, mimeType, fileName, { ocr = true, cacheDir = null, onProgress = null } = {}) {
+async function readPages(fileBuffer, mimeType, fileName, { ocr = true, cacheDir = null, onProgress = null, ocrClient = null } = {}) {
   const t0 = Date.now();
+  const client = ocrClient || getEngine(primaryName()).client;
   if (mimeType !== 'application/pdf') {
     // image upload: one page, always OCR
-    const { readDocument } = require('./paddleText');
+    // cached like a PDF's page 1, so re-reading an image never re-OCRs it
+    const cp = cacheDir && path.join(cacheDir, `${path.basename(fileName)}.p1.txt`);
+    if (cp && fs.existsSync(cp)) {
+      const text = fs.readFileSync(cp, 'utf8');
+      return { fullText: `--- Page 1 of 1 ---\n${text}`, pages: [{ page: 1, source: 'ocr-cached', reason: 'image file' }], ocrPages: 0, totalPages: 1, ms: Date.now() - t0 };
+    }
     if (!ocr) return { fullText: '', pages: [{ page: 1, source: 'needs-ocr', reason: 'image file' }], ocrPages: 0, totalPages: 1, ms: Date.now() - t0 };
-    const r = await readDocument(fileBuffer, mimeType, fileName);
+    const r = await client.readDocument(fileBuffer, mimeType, fileName);
+    if (cp) { fs.mkdirSync(cacheDir, { recursive: true }); fs.writeFileSync(cp, r.fullText.replace(/^--- Page 1 of 1 ---\n/, '')); }
     return { fullText: r.fullText, pages: [{ page: 1, source: 'ocr', reason: 'image file', seconds: r.pageTimings[0] && r.pageTimings[0].elapsedSeconds }], ocrPages: 1, totalPages: 1, ms: Date.now() - t0 };
   }
 
@@ -67,7 +78,7 @@ async function readPages(fileBuffer, mimeType, fileName, { ocr = true, cacheDir 
     if (onProgress) onProgress(`OCR ${toOcr.length} of ${total} page(s): ${toOcr.join(', ')}`);
     // one page at a time, so each finished page is cached even if a later one fails
     for (const n of toOcr) {
-      const [res] = await ocrPdfPages(fileBuffer, [n]);
+      const [res] = await client.ocrPdfPages(fileBuffer, [n]);
       texts.set(n, res.markdown);
       const p = pages.find((x) => x.page === n);
       p.source = 'ocr';

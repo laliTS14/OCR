@@ -7,7 +7,7 @@
 //   → LLM per-section fallback (engine auto/llm only)
 //   → source check (mergeCategorized) → validate
 const { readPages } = require('./pageReader');
-const { ocrCacheDir, OCR_ENGINE } = require('./paddleText');
+const { getEngine, primaryName } = require('./ocrEngines');
 const { categorize } = require('./ollama');
 const { validate } = require('./validate');
 const { REPORT_TYPES } = require('./reportCatalog');
@@ -16,18 +16,19 @@ const { normalizeReadingText } = require('./textNormalize');
 const { parseHeader } = require('./headerParser');
 
 // Reading is PER PAGE (pageReader.js): pages with a usable text layer are
-// read directly; only the rest go to PaddleOCR (paddle_text_service.py —
-// RapidOCR by default, ~7.5 s/page on this CPU). OCR'd pages are cached in
-// ./ocr-cache/<engine> (gitignored — patient data), so a re-upload never
-// re-OCRs a page.
-const OCR_CACHE_DIR = ocrCacheDir(__dirname); // ./ocr-cache/<OCR_ENGINE>
-
-async function runTriageAndRead(fileBuffer, mimetype, originalname) {
+// read directly; only the rest go to the OCR engine — ocrEngine (a name from
+// ocrEngines.js), default OCR_PRIMARY_ENGINE: paddle_text_service.py
+// (RapidOCR, ~7.5 s/page on this CPU) or tesseract_text_service.py. OCR'd
+// pages are cached in ./ocr-cache/<engine> (gitignored — patient data), so a
+// re-upload never re-OCRs a page.
+async function runTriageAndRead(fileBuffer, mimetype, originalname, { ocrEngine = primaryName() } = {}) {
   const timings = {};
   const t0 = Date.now();
+  const eng = getEngine(ocrEngine);
   const read = await readPages(fileBuffer, mimetype, originalname, {
-    cacheDir: OCR_CACHE_DIR,
-    onProgress: (m) => console.log(`[read] ${originalname}: ${m}`),
+    cacheDir: eng.cacheDir(__dirname),
+    ocrClient: eng.client,
+    onProgress: (m) => console.log(`[read:${eng.name}] ${originalname}: ${m}`),
   });
   timings.triageMs = 0;
   timings.readingMs = Date.now() - t0;
@@ -41,7 +42,9 @@ async function runTriageAndRead(fileBuffer, mimetype, originalname) {
       (read.pages.some((p) => p.source === 'ocr-cached') ? ' (some from the OCR cache)' : ''),
     engine: ocrPages === 0
       ? 'Direct PDF text layer (free, no OCR call)'
-      : `Per page: text layer where usable, OCR (${OCR_ENGINE}) for ${ocrPages} page(s) (self-hosted, CPU)`,
+      : `Per page: text layer where usable, OCR (${eng.label}) for ${ocrPages} page(s) (self-hosted, CPU)`,
+    ocrEngine: eng.name,
+    ocrEngineCode: eng.code,
     pages: read.pages,
   };
   const ocrStage = {
@@ -117,10 +120,12 @@ function mergeCategorized(parts) {
 //                      block the rules couldn't parse
 //            'llm'   — one categorize() call per selected report-type block
 //   txLog:   optional transactionLog to write each stage to
+//   ocrEngine: OCR engine for pages without a text layer (ocrEngines.js;
+//              default OCR_PRIMARY_ENGINE). Double OCR is doubleOcr.js.
 // Every output report carries type_id, page_numbers and method
 // ('rules' / 'llm' / 'llm-fallback') next to the shared output contract.
-async function extractDocument(fileBuffer, mimetype, originalname, { typeIds = ['ALL'], engine = 'auto', txLog = null } = {}) {
-  const { triageStage, ocrStage, ocrDump, timings } = await runTriageAndRead(fileBuffer, mimetype, originalname);
+async function extractDocument(fileBuffer, mimetype, originalname, { typeIds = ['ALL'], engine = 'auto', txLog = null, ocrEngine = primaryName() } = {}) {
+  const { triageStage, ocrStage, ocrDump, timings } = await runTriageAndRead(fileBuffer, mimetype, originalname, { ocrEngine });
   if (txLog) {
     txLog.writeJson('01_triage.json', { ...triageStage, timeMs: timings.triageMs });
     txLog.writeText('02_extracted_text.txt', ocrDump);

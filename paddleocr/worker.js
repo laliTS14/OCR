@@ -18,16 +18,29 @@
 //   node worker.js --file <pdf> --case <case_id>
 //                                  TEST: queue a local file for that case (as if
 //                                  uploaded + QC passed) and save it now (api/Ocr/QueueManualReport)
+//   add --double to either --file mode: the report asks for double OCR (as
+//                                  tbl_ocr_report_details.double_ocr = 1 would)
 //
-// Needs the OCR API running, paddle_text_service.py for scanned pages (same as
-// server.js), and Ollama only if OCR_WORKER_ENGINE=auto/llm. Config: .env (see README.md).
+// OCR engines (ocrEngines.js): OCR_PRIMARY_ENGINE (RapidOCR) reads the
+// scanned pages — that result is THE result (api/Ocr/SaveOcrResult →
+// tbl_ocr_data). A report is double-OCR'd only when OCR_DOUBLE_ENABLED is on
+// AND its double_ocr flag is set: Tesseract then also reads it, and its own
+// result is saved separately for comparison (api/Ocr/SaveTesseractResult →
+// tbl_ocr_tesseract_report / tbl_ocr_data_tesseract; no merge — doubleOcr.js).
+// A Tesseract failure is recorded there and never fails the report.
+//
+// Needs the OCR API running, the primary engine's OCR service for scanned
+// pages (paddle_text_service.py by default; tesseract_text_service.py too
+// for double OCR), and Ollama only if OCR_WORKER_ENGINE=auto/llm. Config:
+// .env (see README.md).
 require('dotenv').config();
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
-const { extractDocument } = require('./pipeline');
+const { extractWithOcrEngines } = require('./doubleOcr');
+const { getEngine, ocrConfig, doubleOcrFor, primaryName } = require('./ocrEngines');
 const { createTransactionLog } = require('./transactionLog');
 const { createClientFromEnv, OcrApiError } = require('./ocrApiClient');
 
@@ -107,12 +120,13 @@ function nameMatches(reportName, caseName) {
 // validated pipeline output → the API's Rows (one per test, in report
 // order). Value and the range are stored as printed; min / max come split
 // by the pipeline (validate.js range_min / range_max — each number exactly
-// as printed, null = open end or no numeric range).
+// as printed, null = open end or no numeric range). OcrEngine / Confidence /
+// ConfidenceNote come from doubleOcr.js (engine lookup code, HIGH/MEDIUM/LOW).
 function buildRows(validated) {
   const rows = [];
   for (const report of validated.reports || []) {
-    const pageNo = (report.page_numbers || [])[0];
     for (const row of report.rows || []) {
+      const pageNo = row.page != null ? row.page : (report.page_numbers || [])[0];
       rows.push({
         ReportTypeCode: clean(report.type_id, 30),
         ReportTypeName: clean(report.report_type, 150),
@@ -126,6 +140,9 @@ function buildRows(validated) {
         MinRange: row.range_min == null ? null : clean(row.range_min, 50),
         MaxRange: row.range_max == null ? null : clean(row.range_max, 50),
         PageNo: pageNo == null ? null : pageNo,
+        OcrEngine: clean(row.ocr_engine, 30) || null,
+        Confidence: clean(row.ocr_confidence, 10) || null,
+        ConfidenceNote: clean(row.ocr_note, 500) || null,
       });
     }
   }
@@ -194,23 +211,28 @@ function checkFileBytes(buf, claimedMime) {
 
 // Runs the pipeline and maps it to the API's SaveOcrResult body (minus the
 // claim fields — OcrReportId / WorkerName are added by the caller).
-async function extractForApi(buffer, mimetype, fileName, clientName, txLog) {
+// doubleOcr: the report's own double-OCR flag (double_ocr); it runs only if
+// the .env flags allow it too (ocrEngines.doubleOcrFor).
+// → { body: SaveOcrResult body, tesseract: SaveTesseractResult body | null }
+async function extractForApi(buffer, mimetype, fileName, clientName, txLog, { doubleOcr = false } = {}) {
   // The OCR page cache is keyed by file name (pageReader.js); DC uploads
   // often share names ("report.pdf"), so prefix the content hash — two
   // different files can then never share cached OCR text.
   const fileHash = crypto.createHash('sha256').update(buffer).digest('hex');
   const cacheSafeName = `${fileHash.slice(0, 16)}_${path.basename(fileName || 'report')}`;
   const t0 = Date.now();
-  const result = await extractDocument(buffer, mimetype, cacheSafeName, { typeIds: ['ALL'], engine: ENGINE, txLog });
+  const result = await extractWithOcrEngines(buffer, mimetype, cacheSafeName, {
+    primaryEngine: primaryName(), secondEngine: doubleOcrFor(doubleOcr), typeIds: ['ALL'], engine: ENGINE, txLog,
+  });
   const { validated, triageStage } = result;
   const patient = validated.patient || {};
   const first = (validated.reports || [])[0] || {};
   const resultJson = JSON.stringify({
-    pipelineVersion: PIPELINE_VERSION, engine: ENGINE,
+    pipelineVersion: PIPELINE_VERSION, engine: ENGINE, ocr: result.ocr,
     pages: result.doc.pageTypes.map(({ page, type }) => ({ page, type })),
     sourceCheckRemoved: result.removed, timings: result.timings, data: validated,
   });
-  return {
+  const body = {
     FileHash: fileHash,
     PipelineVersion: PIPELINE_VERSION,
     PageCount: triageStage.pages.length,
@@ -218,6 +240,9 @@ async function extractForApi(buffer, mimetype, fileName, clientName, txLog) {
     // pages classified as pathology (lab report) — tests come only from these
     PathologyPages: result.doc.pageTypes.filter((p) => p.type === 'lab').map((p) => p.page).join(',') || null,
     ProcessingMs: Date.now() - t0,
+    // engine that read the scanned pages (second_ocr_engine_id is set by SaveTesseractResult)
+    OcrEngine: result.ocr.primary,
+    SecondOcrEngine: null,
     PatientName: clean(patient.name, 150) || null,
     PatientAge: clean(patient.age, 20) || null,
     PatientSex: clean(patient.sex, 20) || null,
@@ -231,6 +256,40 @@ async function extractForApi(buffer, mimetype, fileName, clientName, txLog) {
     ResultJson: resultJson.length > MAX_TEXT_CHARS ? JSON.stringify({ truncated: true, pipelineVersion: PIPELINE_VERSION }) : resultJson,
     Rows: buildRows(validated),
   };
+  return { body, tesseract: tesseractBody(result) };
+}
+
+// The double-OCR comparison result → SaveTesseractResult body (minus the
+// claim fields), or null when the report wasn't double-OCR'd. Tesseract's
+// result is saved as it read the report — its own pages, patient, tests.
+function tesseractBody(result) {
+  const o = result.ocr;
+  if (!o.doubleOcrRequested) return null;
+  if (o.secondaryError) return { Status: 'FAILED', ErrorMessage: clean(o.secondaryError, 2000), ProcessingMs: o.secondaryMs, PipelineVersion: PIPELINE_VERSION, Rows: [] };
+  if (!result.secondary) {
+    return { Status: 'DONE', Remark: clean(o.skipReason, 500), PipelineVersion: PIPELINE_VERSION, PageCount: result.triageStage.pages.length, OcrPageCount: 0, Rows: [] };
+  }
+  const s = result.secondary;
+  const patient = s.validated.patient || {};
+  const json = JSON.stringify({
+    pipelineVersion: PIPELINE_VERSION, engine: ENGINE, ocrEngine: s.engine,
+    pages: s.doc.pageTypes.map(({ page, type }) => ({ page, type })), timings: s.timings, data: s.validated,
+  });
+  return {
+    Status: 'DONE',
+    PipelineVersion: PIPELINE_VERSION,
+    PageCount: s.triageStage.pages.length,
+    OcrPageCount: s.triageStage.pages.filter((p) => String(p.source).startsWith('ocr')).length,
+    PathologyPages: s.doc.pageTypes.filter((p) => p.type === 'lab').map((p) => p.page).join(',') || null,
+    ProcessingMs: s.ms,
+    PatientName: clean(patient.name, 150) || null,
+    PatientAge: clean(patient.age, 20) || null,
+    PatientSex: clean(patient.sex, 20) || null,
+    LabPatientId: clean(patient.patient_id, 50) || null,
+    RawText: s.ocrDump.slice(0, MAX_TEXT_CHARS),
+    ResultJson: json.length > MAX_TEXT_CHARS ? JSON.stringify({ truncated: true, pipelineVersion: PIPELINE_VERSION }) : json,
+    Rows: buildRows(s.validated),
+  };
 }
 
 // Extract one claimed report from its file bytes and save it through the
@@ -240,14 +299,26 @@ async function extractAndSave(api, workerName, job, buffer, mimetype, txLog) {
   const label = `report ${job.OcrReportId} (case ${job.CaseId}, ${job.FileName})`;
   const t0 = Date.now();
   mimetype = checkFileBytes(buffer, mimetype); // the real type, whatever the extension says
-  const body = await extractForApi(buffer, mimetype, job.FileName, job.ClientName, txLog);
+  const { body, tesseract } = await extractForApi(buffer, mimetype, job.FileName, job.ClientName, txLog, { doubleOcr: Number(job.DoubleOcr) === 1 });
   const saved = await api.call('/api/Ocr/SaveOcrResult', {
     OcrReportId: job.OcrReportId, WorkerName: workerName, ...body, ProcessingMs: Date.now() - t0,
   });
   console.log(`[${workerName}] saved ${label}: ${saved.RowsSaved} row(s)${saved.RowsSkipped ? `, ${saved.RowsSkipped} skipped` : ''}, ` +
-    `${body.PageCount} page(s) (${body.OcrPageCount} OCR), ${Math.round((Date.now() - t0) / 1000)}s`);
-  if (txLog) txLog.writeJson('00_summary.json', { ocrReportId: job.OcrReportId, caseId: job.CaseId, rows: saved.RowsSaved, pipelineVersion: PIPELINE_VERSION, totalMs: Date.now() - t0 });
-  return { saved, body };
+    `${body.PageCount} page(s) (${body.OcrPageCount} OCR, ${body.OcrEngine}), ${Math.round((Date.now() - t0) / 1000)}s`);
+  // double OCR: Tesseract's own result, for comparison — saved after the
+  // primary result; a problem here is logged, never fails the report
+  let tessSaved = null;
+  if (tesseract) {
+    try {
+      tessSaved = await api.call('/api/Ocr/SaveTesseractResult', { OcrReportId: job.OcrReportId, WorkerName: workerName, ...tesseract });
+      console.log(`[${workerName}]   Tesseract ${tesseract.Status}: ${tessSaved.RowsSaved} row(s)` +
+        `${tesseract.ErrorMessage ? ` — ${tesseract.ErrorMessage}` : ''}${tesseract.Remark ? ` — ${tesseract.Remark}` : ''}`);
+    } catch (err) {
+      console.error(`[${workerName}]   could not save the Tesseract result of ${label}: ${err.message}`);
+    }
+  }
+  if (txLog) txLog.writeJson('00_summary.json', { ocrReportId: job.OcrReportId, caseId: job.CaseId, rows: saved.RowsSaved, tesseract: tesseract ? { status: tesseract.Status, rows: tessSaved ? tessSaved.RowsSaved : null } : null, pipelineVersion: PIPELINE_VERSION, totalMs: Date.now() - t0 });
+  return { saved, body, tesseract };
 }
 
 async function recordFailure(api, workerName, job, err, t0) {
@@ -274,7 +345,7 @@ async function processOne(api, workerName) {
   if (!job) return false;
 
   const label = `report ${job.OcrReportId} (case ${job.CaseId}, ${job.FileName})`;
-  console.log(`[${workerName}] claimed ${label} — attempt ${job.AttemptCount}`);
+  console.log(`[${workerName}] claimed ${label} — attempt ${job.AttemptCount}${Number(job.DoubleOcr) === 1 ? ', double OCR requested' : ''}`);
   const t0 = Date.now();
   const txLog = createTransactionLog(`ocr${job.OcrReportId}_${job.FileName || 'report'}`);
   try {
@@ -290,15 +361,23 @@ async function processOne(api, workerName) {
 
 // ---------- modes ----------
 
-async function dryRun(file) {
+async function dryRun(file, doubleOcr) {
   const buffer = fs.readFileSync(file);
-  const r = await extractForApi(buffer, checkFileBytes(buffer, null), path.basename(file), process.env.DRY_RUN_CLIENT_NAME || '', null);
-  const { Rows, RawText, ResultJson, ...header } = r;
-  console.log(JSON.stringify({ ...header, Engine: ENGINE, RawTextChars: RawText.length, ResultJsonChars: ResultJson.length, RowCount: Rows.length }, null, 2));
-  console.table(Rows.map((x) => ({
-    type: x.ReportTypeCode, test: x.TestNameRaw, value: x.Value, unit: x.Unit,
-    range: x.RangeRaw, min: x.MinRange, max: x.MaxRange, page: x.PageNo,
-  })));
+  const { body, tesseract } = await extractForApi(buffer, checkFileBytes(buffer, null), path.basename(file), process.env.DRY_RUN_CLIENT_NAME || '', null, { doubleOcr });
+  const show = (label, b) => {
+    const { Rows, RawText, ResultJson, ...header } = b;
+    console.log(`===== ${label}`);
+    console.log(JSON.stringify({ ...header, Engine: ENGINE, RawTextChars: (RawText || '').length, ResultJsonChars: (ResultJson || '').length, RowCount: Rows.length }, null, 2));
+    if (Rows.length) {
+      console.table(Rows.map((x) => ({
+        type: x.ReportTypeCode, test: x.TestNameRaw, value: x.Value, unit: x.Unit,
+        range: x.RangeRaw, min: x.MinRange, max: x.MaxRange, page: x.PageNo,
+        engine: x.OcrEngine, conf: x.Confidence,
+      })));
+    }
+  };
+  show('SaveOcrResult (tbl_ocr_data)', body);
+  if (tesseract) show('SaveTesseractResult (tbl_ocr_data_tesseract) — comparison only', tesseract);
 }
 
 // TEST TOOL — `node worker.js --file <report> --case <case_id>`: treat a
@@ -307,7 +386,7 @@ async function dryRun(file) {
 // already claimed by this process, one attempt) and save it right away.
 // Everything after the queue rows (OCR, SaveOcrResult, test mapping, case
 // progress) is the real path. The case needs a digitization record.
-async function manualUpload(file, caseId) {
+async function manualUpload(file, caseId, doubleOcr) {
   const ext = path.extname(file).toLowerCase();
   const buffer = fs.readFileSync(file);
   checkFileBytes(buffer, null); // fail before queueing anything if it isn't a PDF / image
@@ -315,8 +394,8 @@ async function manualUpload(file, caseId) {
   const workerName = `${os.hostname()}-${process.pid}-manual`.slice(0, 50);
   const fileName = path.basename(file, ext).slice(0, 255);
   try {
-    const q = await api.call('/api/Ocr/QueueManualReport', { CaseId: caseId, FileName: fileName, FileExtension: ext, WorkerName: workerName });
-    const job = { OcrReportId: q.OcrReportId, CaseId: caseId, FileName: fileName, ClientName: q.ClientName };
+    const q = await api.call('/api/Ocr/QueueManualReport', { CaseId: caseId, FileName: fileName, FileExtension: ext, WorkerName: workerName, DoubleOcr: doubleOcr ? 1 : 0 });
+    const job = { OcrReportId: q.OcrReportId, CaseId: caseId, FileName: fileName, ClientName: q.ClientName, DoubleOcr: doubleOcr ? 1 : 0 };
     console.log(`Queued manual upload: case ${caseId} (${q.ClientName}), ocr_case_id ${q.OcrCaseId}, ocr_report_id ${q.OcrReportId}`);
 
     const t0 = Date.now();
@@ -324,6 +403,7 @@ async function manualUpload(file, caseId) {
       const { body } = await extractAndSave(api, workerName, job, buffer, null, createTransactionLog(`ocr${q.OcrReportId}_manual_${fileName}`));
       console.table(body.Rows.map((x) => ({
         type: x.ReportTypeCode, test: x.TestNameRaw, value: x.Value, unit: x.Unit, range: x.RangeRaw, min: x.MinRange, max: x.MaxRange,
+        engine: x.OcrEngine, conf: x.Confidence,
       })));
       console.log(`Saved. Mapping (test_id / sub_test_id) is filled in the DB — check with:\n` +
         `  SELECT * FROM tbl_ocr_data WHERE ocr_report_id = ${q.OcrReportId} AND is_active = 1;`);
@@ -346,7 +426,11 @@ async function run({ once }) {
     console.log('Stopping after the current report(s)… (Ctrl+C again to force)');
   });
 
+  const cfg = ocrConfig();
   console.log(`OCR worker: engine=${ENGINE}, version=${PIPELINE_VERSION}, concurrency=${CONCURRENCY}, api=${process.env.OCR_API_URL}`);
+  console.log(`OCR engines: primary=${cfg.primary}, double OCR=${cfg.secondary ? `on for reports with double_ocr = 1 (second: ${cfg.secondary})` : 'off'}` +
+    `, enabled: ${Object.entries(cfg.enabled).filter(([, on]) => on).map(([n]) => n).join(', ')}`);
+  cfg.problems.forEach((p) => console.log(`  !! ${p}`));
   const loop = async (i) => {
     const name = `${os.hostname()}-${process.pid}-${i}`.slice(0, 50);
     while (!stopping) {
@@ -370,8 +454,12 @@ if (require.main === module) {
   const caseIdx = args.indexOf('--case');
   const caseId = caseIdx >= 0 ? parseInt(args[caseIdx + 1], 10) : null;
   if (caseIdx >= 0 && !Number.isInteger(caseId)) { console.error('--case needs a numeric case_id'); process.exit(1); }
-  (fileIdx >= 0 && caseId ? manualUpload(args[fileIdx + 1], caseId)
-    : fileIdx >= 0 ? dryRun(args[fileIdx + 1])
+  // the primary engine must be usable before any report is claimed
+  try { getEngine(primaryName()); } catch (err) { console.error(err.message); process.exit(1); }
+  const doubleOcr = args.includes('--double');
+  if (doubleOcr && !doubleOcrFor(true)) console.log(`!! --double: double OCR cannot run with these flags — ${ocrConfig().problems.join(' ') || 'OCR_DOUBLE_ENABLED is off'}.`);
+  (fileIdx >= 0 && caseId ? manualUpload(args[fileIdx + 1], caseId, doubleOcr)
+    : fileIdx >= 0 ? dryRun(args[fileIdx + 1], doubleOcr)
       : run({ once: args.includes('--once') }))
     .catch((err) => { console.error(err.message); process.exit(1); });
 }

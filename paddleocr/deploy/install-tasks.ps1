@@ -1,13 +1,18 @@
 <#
-  Registers the OCR text service and the OCR worker to start at boot
+  Registers the OCR text service, the Tesseract text service (double OCR)
+  and the OCR worker to start at boot
   (Windows Task Scheduler, run as SYSTEM, no login needed). Run as
   Administrator on the OCR server, after:
     - paddleocr\.venv-rapid is set up (see README.md, "OCR service")
     - npm install in paddleocr
     - paddleocr\.env has OCR_API_URL / OCR_API_KEY for the installed OCR API
       (backend\Health_360_OCR\deploy\install-service.ps1)
+    - for double OCR only: Tesseract installed (UB Mannheim build) and
+      ..\tesseract-ocr\.venv set up (tesseract-ocr\README.md). Without that
+      venv the Tesseract task is skipped and double OCR reports save their
+      Tesseract result as FAILED (the RapidOCR result is unaffected).
 
-    .\deploy\install-tasks.ps1            # register both, start them now
+    .\deploy\install-tasks.ps1            # register all, start them now
     .\deploy\install-tasks.ps1 -NoStart   # register only (start at next boot)
 
   Each task runs a deploy\run-*.cmd launcher that restarts its process if it
@@ -36,11 +41,18 @@ $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) 
 $tasks = @(
     @{ Name = 'Health360 OCR Text Service'; Script = 'run-ocr-service.cmd'; Delay = $null;
        Description = 'RapidOCR text service (paddle_text_service.py, port 8794) for the OCR worker.' },
+    @{ Name = 'Health360 OCR Tesseract Service'; Script = 'run-tesseract-service.cmd'; Delay = $null;
+       Requires = '..\tesseract-ocr\.venv\Scripts\python.exe';
+       Description = 'Tesseract text service (tesseract-ocr\tesseract_text_service.py, port 8799): second engine for double OCR.' },
     @{ Name = 'Health360 OCR Worker'; Script = 'run-worker.cmd'; Delay = 'PT1M';
        Description = 'OCR worker (worker.js): claims queued pathology reports, extracts them, saves via the OCR API.' }
 )
 
 foreach ($t in $tasks) {
+    if ($t.Requires -and -not (Test-Path (Join-Path $appDir $t.Requires))) {
+        Write-Host "Skipped: $($t.Name) - missing $($t.Requires)"
+        continue
+    }
     $cmd = Join-Path $PSScriptRoot $t.Script
     $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$cmd`"" -WorkingDirectory $appDir
     $trigger = New-ScheduledTaskTrigger -AtStartup
@@ -52,5 +64,5 @@ foreach ($t in $tasks) {
 }
 
 Write-Host ''
-Write-Host "Logs: $appDir\logs\service\ (ocr-service.log, worker.log)"
+Write-Host "Logs: $appDir\logs\service\ (ocr-service.log, tesseract-service.log, worker.log)"
 Write-Host "Status: Get-ScheduledTask -TaskName 'Health360 OCR*' | Select TaskName, State"
