@@ -42,7 +42,7 @@ Leave enough room: about 2 GB for the code, venvs and models, plus the logs.
 | Node.js | 20 LTS or newer (tested on 24) | add to PATH (installer default) |
 | Python | **3.12** (64-bit) | tick "Add python.exe to PATH" and install the `py` launcher |
 | Tesseract OCR | 5.x, UB Mannheim Windows build | https://github.com/UB-Mannheim/tesseract/wiki — default folder `C:\Program Files\Tesseract-OCR` (English is included) |
-| Git | any | only to fetch the code (step 3) |
+| Git | any | optional — only if the server can reach GitHub (step 3) |
 
 Check in a **new** PowerShell window:
 
@@ -60,14 +60,36 @@ because the scheduled task runs as SYSTEM.
 
 Pick a folder that is not under a user profile, for example `D:\Health360`.
 
+**No GitHub on the server (usual case): the deploy zip.** On the dev laptop
+it is built from a commit, e.g. `OCR\deploy-package\OCR-worker-<commit>.zip`
+(only `paddleocr\` + `tesseract-ocr\` + the RapidOCR model; no `.env`,
+logs, cache or patient data). Copy it to the server and unzip it into
+`D:\Health360`:
+
+```powershell
+Expand-Archive .\OCR-worker-<commit>.zip -DestinationPath D:\Health360
+# -> D:\Health360\OCR\paddleocr, D:\Health360\OCR\tesseract-ocr
+```
+
+The model is already in the zip, so in step 4 skip copying it. Without git
+the worker can't read its version from a commit, so set it in `.env`
+(step 6): `PIPELINE_VERSION=rules-<commit>` (the zip's commit).
+
+To build a new zip on the dev laptop after new commits (from `OCR\`):
+
+```powershell
+$c = git rev-parse --short HEAD
+git archive --format=zip --prefix=OCR/ -o deploy-package\OCR-worker-$c.zip HEAD paddleocr tesseract-ocr
+# then add the model (it is gitignored):
+python -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1],'a',zipfile.ZIP_DEFLATED).write('paddleocr/onnx-models/en_PP-OCRv3_rec_infer.onnx','OCR/paddleocr/onnx-models/en_PP-OCRv3_rec_infer.onnx')" deploy-package\OCR-worker-$c.zip
+```
+
+**With GitHub access:**
+
 ```powershell
 cd D:\Health360
 git clone -b ocr-pims-integration https://github.com/laliTS14/OCR.git OCR
 ```
-
-(Private repo: sign in with an account that has access, or copy the `OCR`
-folder over from the dev laptop **without** `node_modules`, `.venv*`,
-`ocr-cache`, `logs`, `review-data`, `.env`.)
 
 You need `OCR\paddleocr` and `OCR\tesseract-ocr`, side by side. The other
 folders are not used by the worker.
@@ -81,7 +103,9 @@ py -3.12 -m venv .venv-rapid
 mkdir onnx-models
 ```
 
-Copy the English recognition model into `paddleocr\onnx-models\`:
+Installed from the zip: the model is already in `paddleocr\onnx-models\`
+(the `mkdir` above just says it exists) — go on to the test. Otherwise copy
+the English recognition model into `paddleocr\onnx-models\`:
 `en_PP-OCRv3_rec_infer.onnx` (8.97 MB). Take it from the dev laptop's
 `OCR\paddleocr\onnx-models\`, or download it from
 `huggingface.co/SWHL/RapidOCR`, folder `PP-OCRv3`. It is not in git.
@@ -139,6 +163,9 @@ TESSERACT_TEXT_URL=http://localhost:8799
 
 OCR_WORKER_ENGINE=rules
 OCR_WORKER_CONCURRENCY=1
+
+# installed from the zip (no git): the zip's commit
+PIPELINE_VERSION=rules-<commit>
 ```
 
 `OCR_DOUBLE_ENABLED=true` only allows double OCR. A report is read by
@@ -236,8 +263,13 @@ Tesseract read at least one page; a digital PDF has nothing for it to read
 
 ## Updating, stopping, removing
 
-- **New code:** `git pull` in `D:\Health360\OCR`, `npm install` in
-  `paddleocr` if `package.json` changed, then restart the worker:
+- **New code:** build a new zip (step 3), stop the tasks
+  (`Get-ScheduledTask 'Health360 OCR*' | Stop-ScheduledTask`), unzip it over
+  `D:\Health360` (your `.env`, venvs and `node_modules` are not in the zip,
+  so they stay), update `PIPELINE_VERSION`, then start the tasks again
+  (`Get-ScheduledTask 'Health360 OCR*' | Start-ScheduledTask`). With git:
+  `git pull`. Run `npm install` in `paddleocr` if `package.json` changed.
+  To restart just the worker:
   `Stop-ScheduledTask 'Health360 OCR Worker'; Start-ScheduledTask 'Health360 OCR Worker'`
   (do the same for a service whose `.py` changed).
 - **Turn double OCR off:** `OCR_DOUBLE_ENABLED=false` in `.env`, restart the
