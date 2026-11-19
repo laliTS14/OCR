@@ -13,3 +13,6 @@ ocr-cache/
 
 # Downloaded/converted ONNX OCR models (re-download, see README)
 onnx-models/
+
+# Human review corrections + answer key (real patient data — never commit)
+review-data/

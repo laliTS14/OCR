@@ -21,7 +21,7 @@
 // plausibility, confidence); rows for tests it doesn't know still come out.
 
 const V = require('./labVocabulary');
-const { matchParam, normUnit, nameTokens } = require('./paramDictionary');
+const { matchParam, normUnit, nameTokens, GENERIC_WORDS } = require('./paramDictionary');
 
 const UNIT_SET = new Set(V.UNITS.map(normUnit));
 const QUALS = V.QUALITATIVE.map((q) => q.toLowerCase().split(/\s+/)).sort((a, b) => b.length - a.length);
@@ -205,8 +205,25 @@ const cellsOf = (raw) => raw.split('\t').map(classifyCell).filter(Boolean);
 // result.
 const isComparatorOnly = (pr) => !pr.qualitative && /^[<>≤≥]/.test(pr.value) && !pr.unit;
 
+// A remarks / interpretation column printed after the result
+// ("Ketones⇥Not present⇥Presence may indicate fat metabolism or") is not
+// part of the test name: a prose-like cell (4+ words, one of them a prose
+// word) after the value is dropped. A test name is never a sentence, so
+// with no name before the value the line becomes a bare value (named from
+// the lines above, or skipped) rather than a row named after the remark.
+// A short name AFTER the value (reversed layouts) is kept.
+const isProseCell = (c) => {
+  const words = c.text.toLowerCase().match(/[a-z]+/g) || [];
+  return words.length >= 4 && words.some((w) => V.PROSE_WORDS.has(w));
+};
+function dropRemarksCells(cells) {
+  const vi = cells.findIndex((c) => c.kind === 'V');
+  if (vi < 0) return cells;
+  return cells.filter((c, i) => !(i > vi && c.kind === 'N' && isProseCell(c)));
+}
+
 function parseCells(raw, valueAfterRange) {
-  const cells = cellsOf(raw);
+  const cells = dropRemarksCells(cellsOf(raw));
   if (cells.length < 2) return null;
   const names = cells.filter((c) => c.kind === 'N');
   const values = cells.filter((c) => c.kind === 'V');
@@ -325,6 +342,17 @@ function isRangeLike(t) {
   return !!(pr && pr.junk === 0 && isComparatorOnly(pr));
 }
 
+// "million/cumm⇥4.5-5.5": a unit followed by a reference range and nothing
+// else — the rest of the row above, not a new row. → { unit, range } | null
+function unitThenRange(raw) {
+  const toks = tokenize(raw);
+  const ul = unitLenAt(toks, 0);
+  if (!ul || ul === toks.length) return null;
+  const rest = toks.slice(ul).map((x) => x.t).join(' ');
+  if (!isRangeLike(rest)) return null;
+  return { unit: toks.slice(0, ul).map((x) => x.t).join(' ').replace(/\s*\/\s*/g, '/'), range: rest.trim() };
+}
+
 const unbalanced = (s) => (s.match(/\(/g) || []).length > (s.match(/\)/g) || []).length;
 const joinRange = (a, b) => {
   const t = b.replace(/\s+/g, ' ').trim();
@@ -397,9 +425,32 @@ function unstackColumns(lines, valueAfterRange, typeId) {
   return out;
 }
 
+// The H / L flag column. In text layers that put one cell per line
+// ("HEMOGLOBIN" ⏎ "L" ⏎ "12.6" ⏎ "g/dl"), the flag lands on a line of its own
+// between the name and the value and would be taken for the test name; on
+// a name line ("COUNT⇥L") it would become part of the name. Flags are not
+// stored, so flag-only cells are dropped and flag-only lines removed.
+const isFlagCell = (c) => V.FLAG_TOKENS.has(c.trim().toLowerCase());
+function dropFlagCells(line) {
+  const cells = line.split('\t');
+  if (!cells.some(isFlagCell)) return line;
+  const kept = cells.filter((c) => !isFlagCell(c));
+  return kept.some((c) => c.trim()) ? kept.join('\t') : null;
+}
+
+// How well a candidate name identifies a known test: 3 exact, 2 strong,
+// 1 weak, 0 none — a lone generic word ("COUNT", "VOLUME") counts as none.
+function nameQuality(text, typeId) {
+  const m = matchParam(text, '', typeId);
+  if (!m || m.unitMismatch) return 0;
+  if (m.synTokens.length === 1 && GENERIC_WORDS.has(m.synTokens[0])) return 0;
+  return m.exact ? 3 : m.strong ? 2 : 1;
+}
+const isFragment = (l) => !/\d/.test(l) && l.trim().split(/\s+/).length <= 2;
+
 // → { rows, stats: { lines, rows, unparsed, dictionaryMatched }, needsFallback }
 function parseSection(sectionText, typeId) {
-  const rawLines = sectionText.split('\n');
+  const rawLines = sectionText.split('\n').map(dropFlagCells).filter((l) => l !== null);
   const lines = [rawLines[0], ...unstackColumns(rawLines.slice(1), detectValueAfterRange(rawLines), typeId)];
   const rows = [];
   let pending = [];
@@ -411,11 +462,22 @@ function parseSection(sectionText, typeId) {
   let preRange = []; // range lines printed ABOVE their value (reversed layouts)
   const valueAfterRange = detectValueAfterRange(lines);
 
+  // The name is the last pending line — unless the text layer split it over
+  // several lines ("TOTAL" ⏎ "LEUKOCYTE" ⏎ "COUNT"): then the trailing short
+  // fragments are joined back when that names a known test better than the
+  // last line alone (which here is the generic "COUNT" → Sperm Count).
   const pickPending = () => {
     const names = pending.filter((l) => !notName(l));
-    const pick = names.length ? names[names.length - 1] : pending[0] || '';
-    if (names.length > 1) group = names[names.length - 2];
-    return cleanName(pick).name;
+    if (!names.length) return cleanName(pending[0] || '').name;
+    let take = 1;
+    let best = nameQuality(cleanName(names[names.length - 1]).name, typeId);
+    for (let k = 2; k <= Math.min(4, names.length); k++) {
+      if (!isFragment(names[names.length - k])) break;
+      const q = nameQuality(cleanName(names.slice(-k).join(' ')).name, typeId);
+      if (q > best || (q === best && take > 1 && q > 0)) { best = q; take = k; }
+    }
+    if (names.length > take) group = names[names.length - take - 1];
+    return cleanName(names.slice(-take).join(' ')).name;
   };
   const emit = (name, p, fallbackUnit) => {
     // A test name contains at least one real word (3+ letters) or is a known
@@ -426,6 +488,12 @@ function parseSection(sectionText, typeId) {
     // "Blood Counts ⇥ 2 / 14": a summary scorecard count (abnormal of total),
     // not a result — a real reference range never starts with "/".
     if (/^\/\s*\d/.test(String(p.range || '').trim())) return;
+    // Not results: a phone / ID / PIN number (9+ plain digits, no unit —
+    // letterheads print "Accurate | Caring | Instant ⇥ 0123456789") and page
+    // furniture ("~~~ End of report ~~~", "Page 2 of 7").
+    if (!p.unit && !fallbackUnit && /^\d{9,}$/.test(String(p.value).replace(/[\s-]/g, ''))) return;
+    if (/\bend of (the )?report\b/i.test(name) || /\bpage\s*(\d+\s*)?of\b/i.test(name)
+      || (/\bpage\b/i.test(name) && /^\s*of\s*\d/i.test(String(p.range || '')))) return;
     const range = p.range || preRange.join('; ');
     const row = { test: name, value: p.value, unit: p.unit || fallbackUnit || '', range, _group: group };
     preRange = [];
@@ -488,6 +556,12 @@ function parseSection(sectionText, typeId) {
 
     if (contOpen && last) {
       if (p.kind === 'unit') { if (!last.unit) last.unit = t; return; }
+      const ur = unitThenRange(raw);
+      if (ur) { // one-cell-per-line layouts: "4.2" ⏎ "million/cumm⇥4.5-5.5"
+        if (!last.unit) last.unit = ur.unit;
+        last.range = last.range ? joinRange(last.range, ur.range) : ur.range;
+        return;
+      }
       const continues = rangeLine || (!isNewTest && /[:;]\s*$/.test(last.range) && t.length <= 40); // "Less than 20 ng/ml :" ⏎ "Negative"
       if (continues) { last.range = joinRange(last.range, t); return; }
     } else if (rangeLine && !notes && (p.kind !== 'row' || /[<>≤≥]/.test(t.trim()[0]))) {

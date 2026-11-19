@@ -1,0 +1,9 @@
+# paddle_text_service.py with OCR_ENGINE=rapid (the default) — Python 3.12
+# venv .venv-rapid. Versions as verified on the dev laptop (Nov 2026).
+# The English recognition model is not a pip package: copy
+# onnx-models/en_PP-OCRv3_rec_infer.onnx (see README.md, "OCR service").
+flask==3.1.3
+rapidocr-onnxruntime==1.4.4
+onnxruntime==1.30.0
+numpy==2.5.3
+pillow==12.3.0

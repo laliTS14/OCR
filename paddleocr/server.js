@@ -3,16 +3,15 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
-const { readPages } = require('./pageReader');
-const { ocrCacheDir, OCR_ENGINE } = require('./paddleText');
+const { getEngine, primaryName, ocrConfig, doubleOcrFor } = require('./ocrEngines');
+const { extractWithOcrEngines } = require('./doubleOcr');
 const { categorize } = require('./ollama');
 const { validate } = require('./validate');
 const { createTransactionLog } = require('./transactionLog');
 const { identifyReports, getTextForSection } = require('./sections');
 const { REPORT_TYPES, OTHER_TYPE } = require('./reportCatalog');
-const { parseDocument } = require('./documentParser');
-const { normalizeReadingText } = require('./textNormalize');
-const { parseHeader } = require('./headerParser');
+const reviewStore = require('./reviewStore');
+const { runTriageAndRead } = require('./pipeline');
 
 const PORT = process.env.PORT || 8792;
 const ALLOWED_MIME = new Set(['application/pdf', 'image/jpeg', 'image/png']);
@@ -20,7 +19,7 @@ const MAX_BYTES = 15 * 1024 * 1024; // 15MB — same cap as the other OCR POCs, 
 
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -41,43 +40,6 @@ setInterval(() => {
     if (session.createdAt < cutoff) sessions.delete(id);
   }
 }, 10 * 60 * 1000).unref();
-
-// Shared by every flow. Reading is PER PAGE (pageReader.js): pages with a
-// usable text layer are read directly; only the rest go to PaddleOCR
-// (paddle_text_service.py — RapidOCR by default, ~7.5 s/page on this CPU).
-// OCR'd pages are cached in ./ocr-cache/<engine>
-// (gitignored — patient data), so a re-upload never re-OCRs a page.
-const OCR_CACHE_DIR = ocrCacheDir(__dirname); // ./ocr-cache/<OCR_ENGINE>
-
-async function runTriageAndRead(fileBuffer, mimetype, originalname) {
-  const timings = {};
-  const t0 = Date.now();
-  const read = await readPages(fileBuffer, mimetype, originalname, {
-    cacheDir: OCR_CACHE_DIR,
-    onProgress: (m) => console.log(`[read] ${originalname}: ${m}`),
-  });
-  timings.triageMs = 0;
-  timings.readingMs = Date.now() - t0;
-  const textPages = read.pages.filter((p) => p.source === 'text').length;
-  const ocrPages = read.pages.filter((p) => p.source.startsWith('ocr')).length;
-  const triageStage = {
-    fileName: originalname,
-    fileSizeKb: Math.round(fileBuffer.length / 1024),
-    isDigital: ocrPages === 0,
-    reason: `${read.totalPages} page(s): ${textPages} read from the text layer, ${ocrPages} via OCR` +
-      (read.pages.some((p) => p.source === 'ocr-cached') ? ' (some from the OCR cache)' : ''),
-    engine: ocrPages === 0
-      ? 'Direct PDF text layer (free, no OCR call)'
-      : `Per page: text layer where usable, OCR (${OCR_ENGINE}) for ${ocrPages} page(s) (self-hosted, CPU)`,
-    pages: read.pages,
-  };
-  const ocrStage = {
-    dump: read.fullText,
-    pageCount: ocrPages,
-    pageTimings: read.pages.filter((p) => p.seconds != null).map((p) => ({ pageNumber: p.page, elapsedSeconds: p.seconds })),
-  };
-  return { triageStage, ocrStage, ocrDump: read.fullText, timings };
-}
 
 app.post('/api/extract', upload.single('file'), async (req, res) => {
   if (!req.file) {
@@ -256,64 +218,6 @@ app.get('/api/report-types', (req, res) => {
   res.json([...REPORT_TYPES, OTHER_TYPE].map((t) => ({ id: t.id, label: t.label })));
 });
 
-// "4.8 4.2 - 6.5" in value with an empty range → value "4.8", range
-// "4.2 - 6.5". The model sometimes leaves a row's range glued to its value
-// (seen on HbA1c; same family as PROGRESS.md's "Oh 0.51 0.2-1.2" bug).
-const VALUE_WITH_RANGE_RE = /^([<>]?\d+(?:\.\d+)?)\s+([<>]?\s*\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?)$/;
-
-// Source check: a value or patient field the model returned must literally
-// appear in the text that call was given. Anything else is a hallucination
-// (confirmed Sept 29: another patient's Reg No and Hb value, copied from
-// prompt examples, appeared in a Redcliffe extraction) — it is blanked and
-// flagged rather than passed through looking like a real result.
-const squash = (s) => String(s || '').toLowerCase().replace(/\s+/g, '');
-function inSource(value, source) {
-  const v = squash(value);
-  return !v || source.includes(v);
-}
-
-// parts: [{ categorized, source }]. Patient fields come from whichever
-// section's call returns them first (only one section is sent with the page
-// header — see selectReports.js). Rows repeated verbatim (test + value)
-// across reports are dropped — the model occasionally emits a stray second
-// report echoing a row it already returned — and reports left empty by
-// that are removed.
-function mergeCategorized(parts) {
-  const patient = {};
-  const reports = [];
-  const seen = new Set();
-  const removed = [];
-  for (const { categorized: p, source: rawSource } of parts) {
-    const source = squash(rawSource);
-    for (const [k, v] of Object.entries(p.patient || {})) {
-      if (!v || !String(v).trim()) continue;
-      // sex is normalized ("M" → "Male"): check the raw letter/word instead
-      const present = k === 'sex'
-        ? new RegExp(`\\b(${String(v)[0]}|${v})\\b`, 'i').test(rawSource || '')
-        : inSource(v, source);
-      if (!present) { removed.push({ field: `patient.${k}`, value: v }); continue; }
-      if (!patient[k]) patient[k] = v;
-    }
-    for (const report of p.reports || []) {
-      const rows = [];
-      for (const row of report.rows || []) {
-        const m = !String(row.range || '').trim() && String(row.value || '').trim().match(VALUE_WITH_RANGE_RE);
-        let fixed = m ? { ...row, value: m[1], range: m[2] } : row;
-        if (!inSource(fixed.value, source)) {
-          removed.push({ field: `${report.report_type} / ${fixed.test}`, value: fixed.value });
-          fixed = { ...fixed, value: '', source_check: 'value not found in source text — removed' };
-        }
-        const key = `${String(fixed.test || '').toLowerCase().replace(/\s+/g, ' ').trim()}|${String(fixed.value || '').trim()}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        rows.push(fixed);
-      }
-      if (rows.length) reports.push({ ...report, rows });
-    }
-  }
-  return { categorized: { patient, reports }, removed };
-}
-
 app.post('/api/extract-selected', upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded.' });
@@ -333,6 +237,10 @@ app.post('/api/extract-selected', upload.single('file'), async (req, res) => {
     return res.status(400).json({ error: 'Select at least one report type.' });
   }
   const engine = ['auto', 'rules', 'llm'].includes(req.body.engine) ? req.body.engine : 'auto';
+  // doubleOcr=1: also read the scanned pages with Tesseract, for comparison
+  // (doubleOcr.js; returned separately as stages.tesseract, never merged) —
+  // only when OCR_DOUBLE_ENABLED allows it.
+  const secondEngine = doubleOcrFor(/^(1|true|on)$/i.test(String(req.body.doubleOcr || '')));
 
   const stages = {};
   const txLog = createTransactionLog(`${req.file.originalname}_selected`);
@@ -341,23 +249,17 @@ app.post('/api/extract-selected', upload.single('file'), async (req, res) => {
   const t0 = Date.now();
 
   try {
-    const { triageStage, ocrStage, ocrDump, timings: rtTimings } =
-      await runTriageAndRead(req.file.buffer, req.file.mimetype, req.file.originalname);
-    stages.triage = triageStage;
-    stages.ocr = ocrStage;
-    timings = rtTimings;
-    txLog.writeJson('01_triage.json', { ...stages.triage, timeMs: timings.triageMs });
-    txLog.writeText('02_extracted_text.txt', ocrDump);
-
-    // ---- Stage 3: parse the WHOLE document (rules, no LLM) ----
-    // Every test is extracted and labelled with a report type (or OTHER);
-    // the user's selection only filters the output — see documentParser.js.
-    const t2 = Date.now();
-    const doc = parseDocument(ocrDump);
-    timings.selectMs = Date.now() - t2;
-    const wantAll = typeIds.includes('ALL');
-    const wanted = (id) => wantAll || typeIds.includes(id);
-    const shownTypes = wantAll ? [...new Set(doc.reports.map((r) => r.typeId))] : typeIds;
+    // Read → whole-document rules parse → LLM fallback (engine) → source
+    // check → validate: pipeline.js, shared with the DB worker (worker.js).
+    // engine=rules: rules only (no LLM, milliseconds).
+    // engine=auto (default): rules; the LLM runs only for a block with a
+    //   recognized, selected report-type heading that the rules couldn't parse.
+    // engine=llm: one categorize() call per selected report-type block.
+    const result = await extractWithOcrEngines(req.file.buffer, req.file.mimetype, req.file.originalname, { primaryEngine: primaryName(), secondEngine, typeIds, engine, txLog });
+    const { doc, shownTypes, categorized, removed, validated, ocrDump } = result;
+    timings = result.timings;
+    stages.triage = result.triageStage;
+    stages.ocr = result.ocrStage;
     stages.selection = shownTypes.map((id) => {
       const reports = doc.reports.filter((r) => r.typeId === id);
       const blocks = doc.blocks.filter((b) => b.typeId === id);
@@ -372,60 +274,28 @@ app.post('/api/extract-selected', upload.single('file'), async (req, res) => {
         hasHeader: false,
       };
     });
-    txLog.writeJson('02b_document_blocks.json', doc.blocks);
     // page classes: lab | mer | other | no_text (only lab pages are parsed)
     stages.pages = doc.pageTypes.map(({ page, type }) => ({ page, type }));
-
-    // ---- Stage 4: build the output ----
-    // engine=rules: rules only (no LLM, milliseconds).
-    // engine=auto (default): rules; the LLM runs only for a block with a
-    //   recognized, selected report-type heading that the rules couldn't parse.
-    // engine=llm: one categorize() call per selected report-type block.
-    const t3 = Date.now();
-    const parts = [];
-    const perSection = [];
-    const header = parseHeader(doc.headerText);
-    const meta = { lab_name: '', referring_doctor: header.meta.referring_doctor || '', sample_collected_date: header.meta.sample_collected_date || '', report_date: header.meta.report_date || '' };
-    const source = `${doc.headerText}\n${normalizeReadingText(ocrDump)}`;
-    if (engine !== 'llm') {
-      parts.push({
-        categorized: {
-          patient: header.patient,
-          reports: doc.reports.filter((r) => wanted(r.typeId)).map((r) => ({ report_type: r.report_type, heading: r.headings.join(' / '), ...meta, rows: r.rows })),
-        },
-        source,
-      });
-      shownTypes.forEach((id) => perSection.push({ typeId: id, method: 'rules', ms: timings.selectMs }));
-    }
-    const llmBlocks = doc.blocks.filter((b) => b.typeId && wanted(b.typeId)
-      && (engine === 'llm' || (engine === 'auto' && b.needsFallback && b.rows.length === 0)));
-    for (const b of llmBlocks) {
-      const label = REPORT_TYPES.find((t) => t.id === b.typeId).label;
-      const input = `${doc.headerText}\n\n${b.text}`;
-      const ts = Date.now();
-      const categorized = await categorize(input, { sectionLabel: label });
-      const method = engine === 'llm' ? 'llm' : 'llm-fallback';
-      const ps = perSection.find((p) => p.typeId === b.typeId);
-      if (ps) Object.assign(ps, { method, ms: Date.now() - ts, tokenUsage: categorized.tokenUsage || null });
-      else perSection.push({ typeId: b.typeId, method, ms: Date.now() - ts, tokenUsage: categorized.tokenUsage || null });
-      parts.push({ categorized, source: input });
-      txLog.writeJson(`03_llm_${b.typeId}_p${b.pageNumbers[0]}.json`, categorized);
-    }
-    timings.categorizeMs = Date.now() - t3;
-    timings.perSection = perSection;
-    const { categorized, removed } = mergeCategorized(parts);
     stages.categorized = categorized;
     stages.sourceCheck = { removed };
-    if (removed.length) console.log(`[source-check] removed ${removed.length} value(s) not present in the source text:`, JSON.stringify(removed));
-
-    // ---- Stage 5: Validation (deterministic code, not AI) ----
-    const t4 = Date.now();
-    const validated = validate(categorized);
-    timings.validateMs = Date.now() - t4;
     stages.validated = validated;
-    txLog.writeJson('04_validated.json', validated);
+    stages.ocrEngines = result.ocr; // which engine(s) read the scanned pages
+    // double OCR: Tesseract's own result, as it read the file (comparison only)
+    if (result.secondary) stages.tesseract = { pages: result.secondary.doc.pageTypes.map(({ page, type }) => ({ page, type })), validated: result.secondary.validated };
 
-    const fullResponse = { fileName: req.file.originalname, llmModel: categorizeModel, engine, selected: typeIds, stages, data: validated, timings };
+    // ---- Review: saved so a reviewer can correct it (reviewStore.js) ----
+    // Each row gets a stable rowId the review screen sends back with its edits.
+    const docId = crypto.randomUUID();
+    let n = 0;
+    for (const r of validated.reports || []) for (const row of r.rows || []) row.rowId = `r${n++}`;
+    reviewStore.saveExtraction({
+      docId, fileName: req.file.originalname,
+      fileHash: crypto.createHash('sha256').update(req.file.buffer).digest('hex'),
+      engine, selected: typeIds, sourceText: ocrDump, pages: stages.pages,
+      patient: validated.patient, reports: validated.reports,
+    });
+
+    const fullResponse = { docId, fileName: req.file.originalname, llmModel: categorizeModel, engine, selected: typeIds, stages, data: validated, timings };
     txLog.writeJson('00_summary.json', {
       fileName: req.file.originalname,
       selected: typeIds,
@@ -446,6 +316,19 @@ app.post('/api/extract-selected', upload.single('file'), async (req, res) => {
   }
 });
 
+// ---- Human review (step 1 of the auto-improve plan — see reviewStore.js) ----
+app.post('/api/review', (req, res) => {
+  try {
+    const c = reviewStore.saveReview(req.body || {});
+    console.log(`[review] ${c.fileName} (${c.dc}) ${JSON.stringify(c.counts)}${c.fullyChecked ? ' → gold' : ''}`);
+    res.json({ saved: true, counts: c.counts, fullyChecked: c.fullyChecked, stats: reviewStore.stats() });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/review-stats', (req, res) => res.json(reviewStore.stats()));
+
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
     return res.status(400).json({ error: `File is too large — max ${MAX_BYTES / (1024 * 1024)}MB.` });
@@ -455,8 +338,10 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  const paddleUrl = process.env.PADDLE_TEXT_URL || 'http://localhost:8794';
-  console.log(`PIMS PaddleOCR + rules OCR demo running at http://localhost:${PORT}  (main flow: /select.html)`);
-  console.log(`OCR service (${OCR_ENGINE}) expected at ${paddleUrl} — run paddle_text_service.py separately (see README.md); only pages without a usable text layer are OCR'd`);
+  const cfg = ocrConfig();
+  const primary = getEngine(cfg.primary);
+  console.log(`PIMS ${primary.label} + rules OCR demo running at http://localhost:${PORT}  (main flow: /select.html)`);
+  console.log(`OCR service (${primary.label}) expected at ${primary.client.serviceUrl()} — start it separately (see README.md); only pages without a usable text layer are OCR'd`);
+  console.log(`Double OCR: ${cfg.secondary ? `available per upload (second engine ${getEngine(cfg.secondary).label} at ${getEngine(cfg.secondary).client.serviceUrl()})` : 'off'}${cfg.problems.length ? `  — ${cfg.problems.join(' ')}` : ''}`);
   console.log(`Ollama: ${process.env.OLLAMA_URL || 'http://localhost:11434'}  categorize=${process.env.CATEGORIZE_MODEL || process.env.OLLAMA_MODEL || 'llama3.2:3b'}`);
 });

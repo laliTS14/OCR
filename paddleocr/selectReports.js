@@ -29,7 +29,7 @@ const { normalizeReadingText } = require('./textNormalize');
 const MAX_HEADING_LEN = 100;
 const MAX_SECTION_LINES = 150;
 const MAX_HEADER_LINES = 45;
-const PATIENT_FIELD_RE = /\b(patient|name|age|gender|sex|uhid|reg\.? ?no|dob|mobile|contact|phone|referred)\b/i;
+const PATIENT_FIELD_RE = /\b(patient|name|age|gender|sex|uhid|reg\.? ?no|dob|mobile|contact|phone|referred|ref\.?\s*by|p\.?\s*id)\b/i;
 
 const normLine = (s) => s.trim().toLowerCase().replace(/\s+/g, ' ');
 

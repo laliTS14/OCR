@@ -21,7 +21,7 @@ const { classifyLine, findRepeatedLines, buildHeaderText, isProse, PAGE_MARKER_R
 const { parseSection } = require('./rowParser');
 const { isHeaderLine } = require('./headerParser');
 const { PARAMS } = require('./paramDictionary');
-const { classifyPage } = require('./pageClassifier');
+const { classifyPages } = require('./pageClassifier');
 
 const TYPE_BY_ID = new Map([...REPORT_TYPES, OTHER_TYPE].map((t) => [t.id, t]));
 const PARAM_BY_ID = new Map(PARAMS.map((p) => [p.id, p]));
@@ -33,7 +33,7 @@ function parseDocument(ocrDump) {
   const allPages = splitIntoPages(normalizeReadingText(ocrDump));
   // Only pathology (lab) pages are parsed; MER / other / no-text pages are
   // reported in `pageTypes`, never silently dropped (pageClassifier.js).
-  const pageTypes = allPages.map((p) => ({ page: p.pageNumber, ...classifyPage(p.text) }));
+  const pageTypes = classifyPages(allPages);
   const pages = allPages.filter((p, i) => pageTypes[i].type === 'lab');
   const repeated = findRepeatedLines(pages);
   const lines = [];
@@ -112,7 +112,7 @@ function parseDocument(ocrDump) {
     const g = groups.get(gk);
     if (e.heading) g.headings.add(e.heading);
     g.pageNumbers.add(e.page);
-    g.rows.push(e.row);
+    g.rows.push({ ...e.row, page: e.page }); // the page this row was read from
   }
   const reports = [...groups.values()].map((g) => ({
     ...g,

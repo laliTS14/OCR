@@ -183,14 +183,43 @@ rules parser (`documentParser.js` + `rowParser.js` + `labVocabulary.js` +
   Both are text only (no layout/table models). The service corrects page
   skew from the text boxes' own angle, then rebuilds reading-order lines,
   turning wide column gaps into tabs, so an OCR'd page looks like a PDF text
-  layer. Node client: `paddleText.js` (same exports as
+  layer. Node client: `ocrClient.js` (one client for every engine's
+  service — same `/ocr` contract; same functions as
   `unlimited-ocr/unlimitedocr.js`); set the same `OCR_ENGINE` for the Node
   app so it uses that engine's cache folder.
+- **OCR engines + double OCR (Oct 22, 2026):** `ocrEngines.js` holds the
+  engine flags — `OCR_PRIMARY_ENGINE` (`paddle` default / `tesseract` /
+  `gemini`), `OCR_ENGINE_{PADDLE,TESSERACT,GEMINI}_ENABLED` (Gemini is a
+  reserved slot, not built) and `OCR_DOUBLE_ENABLED`. A report is
+  **double-OCR'd** only when that master switch is on **and** the report asks
+  for it (`tbl_ocr_report_details.double_ocr = 1`, `--double`, or the
+  "Double OCR" checkbox): its scanned pages are also read by **Tesseract**
+  (`../tesseract-ocr/tesseract_text_service.py`, port 8799), **for
+  comparison only** — RapidOCR's result is still the one saved to
+  `tbl_ocr_data`; Tesseract's own result goes to `tbl_ocr_tesseract_report`
+  / `tbl_ocr_data_tesseract` (`api/Ocr/SaveTesseractResult`), never merged;
+  a Tesseract failure never fails the report (`doubleOcr.js`). Every row
+  carries `ocr_engine` (engine or `TEXT_LAYER`) and `ocr_confidence` (the
+  parser's own). Details: `../tesseract-ocr/README.md`.
 - **Shared code:** the parser/dictionary/catalog/classifier files are copies
   of `unlimited-ocr/`'s — keep the two copies identical when changing either
-  (the only intended differences are `paddleText.js`, `pageReader.js`'s
-  require, `server.js` strings/port, `ollama.js` always using the plain-text
-  prompt, and `test-extract.js`).
+  (the only intended differences are `ocrClient.js`/`ocrEngines.js`,
+  `pageReader.js`'s reading client, `server.js` strings/port, `ollama.js`
+  always using the plain-text prompt, and `test-extract.js`). Every `.js`
+  file and `public/` is also copied, identically, into `../tesseract-ocr/`.
+- **Human review (`reviewStore.js`, `gold-eval.js`):** below the results on
+  `/select.html`, a "Review & correct" table lets a reviewer fix any test /
+  value / unit / range / report type, delete junk rows, add missed tests and
+  fix patient fields (DC name required). `POST /api/review` saves the answer
+  with a per-row diff (ok / edited / retyped / deleted / added) next to what
+  the pipeline produced; `GET /api/review-stats` gives totals. Ticking
+  **Fully checked** also stores the report (with its document text) as an
+  answer key. Everything goes to `review-data/` (gitignored — patient data):
+  `extractions/`, `corrections/`, `gold/` (keyed by file hash).
+  `node gold-eval.js [--verbose] [--save | --compare]` re-parses every
+  answer key with the current code (no PDF/OCR, milliseconds) and reports
+  tests found, junk rows, and value / unit / range / report-type / patient
+  accuracy; `--compare` exits 1 if any metric dropped vs the saved baseline.
 - **Also still here:** `paddle_service.py` (PP-Structure, port 8791) — not
   used by the new pipeline.
 
@@ -211,10 +240,121 @@ cd paddleocr
 npm install
 npm start                       # http://localhost:8792 → open /select.html
 node test-extract.js "<file>"   # CLI: pages, patient, every test, validation
-node batch-eval.js "<folder>" --ocr   # whole folder, OCR only where needed
+node test-extract.js "<file>" --double   # + Tesseract's own result, printed separately (OCR_DOUBLE_ENABLED=true)
+node batch-eval.js "<folder>" --ocr   # whole folder, OCR only where needed (--engine tesseract to compare)
+node gold-eval.js --compare     # accuracy vs the human answer key (review-data/gold/)
+node page-eval.js --verbose     # page classification vs review-data/page-key.json
 ```
 Ollama is only needed for the optional LLM fallback (`engine=auto` when a
 section can't be parsed, or `engine=llm`).
+
+**Shared pipeline:** `pipeline.js` (`extractDocument()`: read → rules parse
+→ LLM fallback → source check → validate) is used by both `server.js`'s
+`/api/extract-selected` and `worker.js`, so both produce identical output.
+Each output report also carries `type_id`, `page_numbers` and `method`
+(`rules` / `llm` / `llm-fallback`), and every row carries `range_min` /
+`range_max` — the printed reference range split in two by `validate.js`,
+each number kept exactly as printed (`"0.10"`, a string; sex-specific
+ranges use `patient.sex`; interpretation tables use the
+normal/sufficient/adult segment; `null` = open end or not parseable).
+The worker stores them in `tbl_ocr_data.min_range` / `max_range` (text).
+`tbl_ocr_data` keeps `value` as printed only — no numeric copy, flag,
+confidence or row sequence (the high/low `validation` stays in the
+pipeline output / `result_json`).
+
+### OCR worker (`worker.js`) — PIMS integration, through the OCR API
+
+Processes the PIMS OCR queue **through the OCR insertion API**
+(`backend/Health_360_OCR` in the parent repo — ASP.NET, same layered
+architecture as the PIMS backend; plain JSON + an `X-Api-Key` header;
+client: `ocrApiClient.js`).
+The worker never connects to the DB. Report-upload QC
+(`sp_update_qc_remark`, status 22) queues each case's pathology files
+(`tbl_report_upload_document.Group_test_type_id = 3`) into
+`tbl_ocr_case_list` / `tbl_ocr_report_details`; the worker claims one
+report at a time (`api/Ocr/ClaimReport`),
+downloads it, runs `extractDocument()` on everything (`typeIds ['ALL']`),
+and saves the result (`api/Ocr/SaveOcrResult` → `tbl_ocr_data`, one row per
+test, mapped to PIMS tests) or records the failure
+(`api/Ocr/MarkReportFailed`, 3 attempts). Tables/SPs live in the parent
+repo: `database/tables/ocr_extraction_tables.sql`,
+`database/tables/ocr_test_mapping.sql`, `database/tables/ocr_job_log.sql`,
+`database/stored_procedures/ocr_extraction_sps.sql`,
+`database/stored_procedures/ocr_sp_update_qc_remark.sql`,
+`database/stored_procedures/ocr_queue_job.sql` (see the parent
+`database.md` / `backend.md`).
+
+**Who fills the queue: the database, not the worker.** Report QC queues
+files the moment it passes; the MySQL event `ev_queue_ocr_reports` (every
+10 min, `sp_job_queue_ocr_reports`) re-queues reports stuck in PROCESSING
+> 30 min and queues QC-passed pathology files that are not queued yet
+(cases from before OCR existed, anything QC missed) — at most 200 per run,
+oldest first — and logs each run in `tbl_ocr_job_log`
+(`SELECT * FROM tbl_ocr_job_log ORDER BY ocr_job_log_id DESC LIMIT 20;`).
+The worker only consumes the queue.
+
+```bash
+cd paddleocr
+npm install
+node worker.js --file "<pdf>"      # dry run: what would be saved — no API / DB at all
+node worker.js --file "<pdf>" --case <case_id>
+                                   # TEST: queue a local file for that case (as if uploaded +
+                                   # report QC passed) and save it now (api/Ocr/QueueManualReport) —
+                                   # the case needs a tbl_digi_master row; rows are tagged
+                                   # file_path 'manual-upload/…' and get one attempt only
+npm run worker                     # run continuously (Ctrl+C finishes the current report)
+node worker.js --once              # process at most one queued report
+```
+
+Needs the OCR API running (`dotnet run --project OCR_API/OCR_API.csproj` in
+`backend/Health_360_OCR`) and `paddle_text_service.py` for scanned pages.
+`.env` keys: `OCR_API_URL` (dev `https://localhost:7196`),
+`OCR_API_KEY` (must equal `OcrApi:ApiKey` in the API's
+`appsettings.json`), `OCR_API_INSECURE_TLS=1` (accept the dev self-signed certificate),
+`REPORT_UPLOAD_BASE_URL` (backend `paths:ReportUploadDocBaseUrl`) or
+`REPORT_UPLOAD_BASE_FOLDER` (read from disk on the file server),
+`OCR_WORKER_ENGINE` (`rules` default / `auto` / `llm`),
+`OCR_WORKER_CONCURRENCY` (default 1),
+`OCR_WORKER_POLL_MS` (5000),
+`PIPELINE_VERSION` (default `<engine>-<git short hash>`).
+
+**Running on a server** (`paddleocr/deploy/`, Windows, no extra tools) —
+step-by-step guide from a bare server: `paddleocr/deploy/SERVER_SETUP.md`:
+
+```powershell
+# elevated PowerShell, after: .venv-rapid set up, npm install, .env pointing at the
+# installed OCR API (backend/Health_360_OCR/deploy/install-service.ps1 → OCR_API_URL=http://localhost:5235)
+.\deploy\install-tasks.ps1          # register + start all
+.\deploy\uninstall-tasks.ps1
+Get-ScheduledTask -TaskName 'Health360 OCR*' | Select TaskName, State
+```
+
+`install-tasks.ps1` registers Task Scheduler tasks that start at boot as
+SYSTEM: **Health360 OCR Text Service** (`deploy\run-ocr-service.cmd` →
+`paddle_text_service.py`), **Health360 OCR Tesseract Service**
+(`deploy\run-tesseract-service.cmd` → `../tesseract-ocr/tesseract_text_service.py`,
+port 8799, for double OCR — registered only if `../tesseract-ocr/.venv`
+exists; Tesseract itself must be installed) and **Health360 OCR Worker**
+(`deploy\run-worker.cmd` → `worker.js`, 1 min after boot). Each `.cmd`
+restarts its process 10 s after it exits or crashes; logs go to
+`paddleocr/logs/service/` (`ocr-service.log`, `tesseract-service.log`,
+`worker.log`, appended — no rotation). Double OCR also needs
+`OCR_DOUBLE_ENABLED=true` in `.env` and, on UAT, the parent repo's
+`database/stored_procedures/ocr_double_ocr_uat_rollout.sql` (see
+`PROGRESS.md` "UAT go-live"). The `.ps1` / `.cmd` files are kept pure ASCII: Windows
+PowerShell 5.1 reads BOM-less scripts as ANSI, and an em dash once broke
+the parse.
+
+Accepted files: any PDF or image (JPEG, PNG, WEBP, TIFF, BMP, GIF —
+first frame only for multi-page TIFF / GIF). The type is taken from the
+downloaded bytes, never the extension (DCs upload JPEG photos named
+`.png`); anything that is neither fails — the report-upload site returns
+HTTP 200 with its `index.html` for a missing file, reported as "File not
+found".
+
+The file name passed to the pipeline is prefixed with the file's sha256,
+because the per-page OCR cache is keyed by file name and DC uploads often
+share names.
 
 ### Previous version (now in `paddleocr/legacy/`)
 
@@ -264,6 +404,18 @@ detail, environment gotchas (Python version pinning, an oneDNN CPU crash
 workaround, a RAM-pressure crash on large scanned images), and known
 limitations are in `paddleocr/README.md` — read that before assuming a
 result is trustworthy.
+
+## `tesseract-ocr/` — the paddleocr pipeline on Tesseract; second engine for double OCR (Oct 22, 2026)
+
+Same code as `paddleocr/` (every `.js` file and `public/` copied, kept
+identical) with **Tesseract 5** reading the scanned pages:
+`tesseract_text_service.py` (Flask, port **8799**, same `/ocr` contract as
+`paddle_text_service.py`; psm 6, pages scaled to ~300 dpi, wide gaps → tabs).
+Standalone demo on port 8800 (`OCR_PRIMARY_ENGINE` defaults to `tesseract`
+in this folder), and the service `paddleocr/worker.js` calls as the second
+engine when a report is double-OCR'd. Needs the Tesseract program (UB
+Mannheim Windows build). Full details, flags and how double OCR is stored:
+`tesseract-ocr/README.md`.
 
 ## `azure-llm/` — 4-stage pipeline (Azure OCR + local LLM)
 
@@ -527,7 +679,16 @@ only filters what's shown:
    `documentParser.js` parses the **whole document** (~10-50ms, no LLM):
    - each page is first classified by `pageClassifier.js` as `lab`,
      `mer`, `other` or `no_text`; only `lab` pages are parsed (the rest are
-     reported in `stages.pages`, MER handling comes later);
+     reported in `stages.pages`, MER handling comes later). A page with
+     ≥ 2 ECG / radiology / ID-document / non-medical words (ECG, QRS, bpm,
+     X-ray, USG, Aadhaar, UIDAI, PAN, PNR, passenger, salary …) and < 2
+     confident rows is `other`, never
+     `lab`; a single-test page (one row + lab wording) is `lab`; an
+     `other` page with lab wording right after a lab page is the same
+     report's continuation → `lab` (`classifyPages()`). The worker stores
+     the lab page numbers in `tbl_ocr_report_details.pathology_pages`.
+     `node page-eval.js [--verbose]` scores this against a hand-checked
+     answer key (`review-data/page-key.json`, 279 pages of 26 files);
    - it's split into blocks at every recognized heading (a short line
      matching a catalog pattern or a generic boundary like a department
      name, with no result-like numbers — so `HbA1c %\t4.8 4.2 - 6.5` is a
@@ -557,6 +718,8 @@ Built on what every lab report shares, not on any one lab's layout:
   `<table>` rows → tab-separated lines; Unlimited-OCR's split tables
   ("test | value" + "unit | range") zipped back together **only when the
   result rows and unit/range rows match one-to-one**, else left alone.
+  Cyrillic / Greek look-alike letters inside Latin words are folded to
+  Latin (some PDF fonts write "HЕМАТOCRIT" with Cyrillic Е М А Т).
 - **`labVocabulary.js`** — the shared vocabulary: units (normalized, so
   `mg / dL` = `MG/DL`), qualitative results (`Non Reactive`, `Not
   Detected`, `Pale Yellow`…), method and specimen lines, reference-range
@@ -571,15 +734,30 @@ Built on what every lab report shares, not on any one lab's layout:
   sequences, ranges continued on following lines *or* printed above the
   value, unit-only lines, notes blocks, and rejects prose/meta lines
   instead of guessing. Returns `needsFallback` when a section parses badly.
-- **`paramDictionary.js`** — 216 standard pathology tests (all 28 panels) with synonyms, unit
+  H / L flag cells and flag-only lines are dropped before parsing (in
+  one-cell-per-line text layers the flag sits between name and value), and
+  a name split over several short lines ("TOTAL" ⏎ "LEUKOCYTE" ⏎ "COUNT")
+  is joined back when that names a known test better than the last line.
+  A remarks column after the value ("Ketones⇥Not present⇥Presence may
+  indicate…") is dropped (a test name is never a sentence); a
+  "unit⇥range" line right after a value is that row's unit and range.
+  Never emitted as rows: a 9+-digit plain number with no unit (phone / ID /
+  PIN on a letterhead) and page furniture ("End of report", "Page 2 of 7").
+- **`paramDictionary.js`** — 217 standard pathology tests (all 28 panels) with synonyms, unit
   families and physically plausible ranges. Used only to label rows
   (`canonical`), disambiguate (Neutrophils % vs absolute), flag implausible
   values (`Hb 136` → possible lost decimal) and score `confidence`; tests
-  not in it are still extracted.
+  not in it are still extracted. A ratio name ("Total Cholesterol/HDL",
+  "TG/HDL", "SGOT/SGPT", anything saying "ratio") only ever matches a
+  ratio entry — never one of the two tests it divides; with no ratio entry
+  it gets no code.
 - **`headerParser.js`** — patient/report fields from `Label : value`,
   `value ⇥ Label`, vertical `Label ⏎ value`, combined `Age / Sex` fields
-  and unlabeled `MR. NAME` / `65 Years /M` lines; skips doctors'
-  signature-block registration numbers.
+  and unlabeled `MR. NAME` / `65 Years /M` lines; each tab cell as its
+  own `Label : value`; skips doctors' signature-block registration numbers
+  (ID fields only — a patient's age/sex printed there still count).
+  One-cell-per-line headers (3+ isolated `:` lines: `Age` ⏎ `/` ⏎ `Sex`
+  ⏎ `:` ⏎ `46` ⏎ `YRS/M`) are rebuilt into `Label : value` lines first.
 
 Row output keeps the shared contract (`test, value, unit, range`) and adds
 optional `canonical`, `param_id`, `confidence` (`high|medium|low`), `flags`.

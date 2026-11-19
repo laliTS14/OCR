@@ -1,5 +1,5 @@
 // Batch evaluation of the whole-document rules pipeline over a folder of
-// real reports: node batch-eval.js "<folder>" [--ocr] [--only a,b] [--save <out.json>]
+// real reports: node batch-eval.js "<folder>" [--ocr] [--engine paddle|tesseract] [--only a,b] [--save <out.json>]
 //
 // Purpose: judge the parser on MANY reports at once, and look for gaps that
 // recur across labs — never tune it to one file (see PROGRESS.md's "Design
@@ -9,16 +9,21 @@
 // Per file it reports every test found (whole-document parsing), grouped by
 // report type (OTHER = fits no category), their confidence mix, and
 // recognized report-type blocks that would fall back to the LLM. The aggregate at the end is what matters.
+require('dotenv').config({ quiet: true });
 const fs = require('fs');
 const path = require('path');
 const { readPages } = require('./pageReader');
 const { parseDocument } = require('./documentParser');
 const { parseHeader } = require('./headerParser');
 
-// --ocr: scanned files are read with PaddleOCR (paddle_text_service.py must be
+// --ocr: scanned files are read with the OCR engine (its service must be
 // running) and the OCR text is cached in ./ocr-cache/<file>.txt, so later
 // runs re-parse from the cache in milliseconds instead of re-OCRing.
-const OCR_CACHE = require('./paddleText').ocrCacheDir(__dirname); // ./ocr-cache/<OCR_ENGINE>
+// --engine <paddle|tesseract>: which OCR engine reads scanned pages (default
+// OCR_PRIMARY_ENGINE, else paddle); each engine has its own cache folder.
+const engIdx = process.argv.indexOf('--engine');
+const ENGINE = require('./ocrEngines').getEngine(engIdx > 0 ? process.argv[engIdx + 1] : require('./ocrEngines').primaryName());
+const OCR_CACHE = ENGINE.cacheDir(__dirname); // ./ocr-cache/<engine>
 
 // Per-page reading (pageReader.js): text layer where usable, OCR only for
 // the other pages (with --ocr; per-page cache in ./ocr-cache). Without
@@ -27,7 +32,7 @@ async function evalFile(file, useOcr) {
   const buf = fs.readFileSync(file);
   const t0 = Date.now();
   const read = await readPages(buf, 'application/pdf', path.basename(file), {
-    ocr: useOcr, cacheDir: OCR_CACHE, onProgress: (m) => console.log(`   … ${m}`),
+    ocr: useOcr, cacheDir: OCR_CACHE, ocrClient: ENGINE.client, onProgress: (m) => console.log(`   … ${m}`),
   });
   const textPages = read.pages.filter((p) => p.source === 'text').length;
   const ocrDone = read.pages.filter((p) => p.source.startsWith('ocr')).length;

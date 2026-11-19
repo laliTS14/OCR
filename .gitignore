@@ -1,3 +1,6 @@
 # Office lock / auto-recovery files
 ~$*
 *(AutoRecovered)*
+
+# Server deploy zips (built from a commit; not source)
+deploy-package/

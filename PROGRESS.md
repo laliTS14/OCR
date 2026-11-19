@@ -1497,6 +1497,35 @@ parser fit the few files we've seen and get worse on the rest. So:
   showing the lab's own typo `mm 1st Houe` as its name (value and range
   still correct).
 
+## Auto-improve plan, step 1: human review + answer key (Oct 1, 2026)
+
+User question: how can the rules pipeline "auto-learn" later? Agreed plan:
+(1) capture every human correction + build an answer key, (2) dictionary
+suggestions from corrections — promoted only when the same fix recurs across
+≥3 DCs and `gold-eval.js --compare` shows no drop, (3) once a few thousand
+corrected rows exist, train a small CPU line classifier / field tagger to
+work alongside the rules, (4) optional LoRA fine-tune of the fallback LLM.
+**Hard rule: never learn from the pipeline's own unchecked output** — only
+human-checked answers.
+
+**Step 1 built (`paddleocr/`):** "Review & correct" table on `/select.html`
+(edit / delete / add rows, report type, patient fields; DC name required;
+"show only medium/low confidence" filter) → `POST /api/review` →
+`reviewStore.js` saves the extraction (with document text), the reviewer's
+answer and a per-row diff in `review-data/` (gitignored). "Fully checked"
+reviews become answer keys (`review-data/gold/<fileHash>.json`);
+`gold-eval.js` scores the current parser on them (found, junk, value / unit /
+range / report type / patient accuracy) and `--compare` is the regression
+gate. Verified end to end on a synthetic report (fake patient — the sample
+folder on D: was not mounted): diff counts, answer-key save, scoring and
+compare all correct. Only in `paddleocr/` (not copied to `unlimited-ocr/` —
+review is app-side, not shared parser code).
+
+**Next for step 1:** review 30–50 real reports from as many DCs as possible
+with "Fully checked", then `node gold-eval.js --save` for the first baseline.
+Not yet: per-row source line (the document text is saved instead), reviewer
+identity, editing a saved review later (re-saving overwrites it).
+
 ## Faster OCR on CPU: quick-pass idea dropped, RapidOCR (ONNX) benchmarked (Oct 1, 2026)
 
 **Why:** a 10-page scan with one report selected still took ~4-5 min — every
@@ -1552,6 +1581,631 @@ heading line was being parsed as a test name; `documentParser.js` and
 **391 rows, 359 / 30 / 2** (unlimited-ocr batch: 323 rows, 306 / 15 / 2). Caveat: the English
 rec model is PP-OCRv3 (older than PaddleOCR's v5) — equal on these files;
 keep an eye on it as more labs are added (`batch-eval.js` with each engine).
+
+## New sample data: 275 unseen files through the current pipeline (Oct 23, 2026)
+
+Inventory of the two sample folders (`Downloads/REPORTS/REPORTS`,
+`D:/Samples reports` — Alp_samples + HSP-samples): 822 files, **312 distinct
+by content** (insurer folders under `Sample Reports` are mostly copies of
+`All Reports`; `HSP-samples/REPORTS` = `Downloads/REPORTS`). 31 had been
+through the current pipeline, 5 only through older demos, 1 unclear, **275
+new** (128 PDFs, 147 images). Per-file lists (gitignored — patient names):
+`paddleocr/review-data/sample-inventory.csv`, `new-samples-results.csv`.
+
+Current pipeline (rules only, RapidOCR) over the 275: **80 min, 0 errors**,
+1056 pages (909 OCR'd). 87 files had lab pages with rows; checked by hand
+from their rows:
+- **68 real pathology reports**: 2585 rows, **2355 matched a dictionary test
+  (91 %)** — CBC 677, urine 666, LFT 419, lipid 282, KFT 130, HbA1c 108 …;
+  `Reemanshu.PDF` is a real pathology page read too garbled for any test.
+- **18 misclassified as lab** (all rows junk, 0 dictionary matches) +
+  `Seema Meena TMT` (1/20): **TMT / ECG / 2D-echo reports (11)** — their
+  stage/ST-level tables look like result rows — **ID cards (7)** (Aadhaar
+  photos and scans: "VID 9155 = 1652", PIN codes) and 1 MER form. The Oct 16
+  page-key fixes (100 % on the 26 files they came from) did not hold on new
+  files for these two kinds — **fixed the same day, below.**
+- 188 files had no lab page (MER forms, TMT/ECG, X-ray, photos, ID proofs)
+  — not checked one by one.
+
+**Classifier fix (Oct 23).** Every misclassified page had reached 'lab'
+through one rule — "≥ 2 rows" — with no confident row and no lab wording:
+TMT stage tables, ECG lead values and Aadhaar digit groups parse as 2-3
+uncertain rows. Measured first: none of the key's 147 real lab pages relied
+on it (all have a confident row, or lab vocabulary). Changes in
+`pageClassifier.js`:
+- 'lab' needs a confident row, ≥ 3 lab words, or ≥ 1 row **and** ≥ 1 lab word
+  (was: ≥ 2 rows of any kind, or ≥ 1 row and ≥ 2 lab words);
+- general non-pathology vocabulary added: TMT/ECG (bruce, METS, ST level /
+  slope, post J, target HR, linked medians, sinus rhythm, ex start, peak ex),
+  echo measurements (LVID, LVPW, IVS), Aadhaar (Government of India,
+  enrolment no, VID), contracts (agreement, hereinafter, indemnify,
+  non-exclusive, empanel).
+Page key extended: 76 hand-read pages of 26 new files (TMT/ECG/echo,
+Aadhaar, an HSP agreement, ultrasound; 2 real lab pages of `Reemanshu.PDF`)
+— only the pages read are listed. `page-eval.js` now also reads image files,
+and `pageReader.js` caches an image's OCR like a PDF page.
+**Judged over everything:** key 149/149 pathology + **126/200 → 199/200**
+non-pathology (left: one garbled TMT chart with a confident-looking row);
+the 26 original key files' rows identical; the 275 new files: dictionary-
+matched rows **2355 → 2355**, 211 junk rows gone; the only pages lost from
+real reports were an ECG, 4 Aadhaar cards, a TMT trace and 2 ultrasound
+pages inside case files (all checked). Copied to `unlimited-ocr/` and
+`tesseract-ocr/`.
+
+## Double OCR redone as comparison only (Nov 2, 2026)
+
+Decision (user): not every report is double-OCR'd, and double OCR is **for
+show** — store Tesseract's result next to RapidOCR's, like it, but never merge.
+Everything else stays single OCR with RapidOCR. Choices made with the user:
+separate tables; no merge and no comparison in code; a Tesseract failure
+never fails the report; DB only (no UI) for now.
+- `paddleocr/doubleOcr.js` rewritten: the primary result is returned exactly
+  as before (rows tagged with their engine + the parser's own confidence);
+  for a double-OCR report the second engine's full result comes back
+  separately (`result.secondary`), its failure as `ocr.secondaryError`. The
+  Oct 22 merge (HIGH/MEDIUM, better-validating value, junk filter, page-pairing)
+  is **removed**.
+- `worker.js`: `SaveOcrResult` exactly as before (now `SecondOcrEngine` is
+  always null), then `SaveTesseractResult` with Tesseract's own pages,
+  patient, raw text, JSON and tests — DONE, FAILED (+ error), or DONE with 0
+  tests and a remark for a digital PDF. Errors saving it are logged only.
+- Parent repo: new `tbl_ocr_tesseract_report` + `tbl_ocr_data_tesseract`
+  (`database/tables/ocr_tesseract_result_tables.sql`),
+  `sp_save_ocr_tesseract_result`
+  (`database/stored_procedures/ocr_tesseract_result_sps.sql`), OCR API
+  `POST api/Ocr/SaveTesseractResult` (DO / BAL / DAL / controller; builds, 0
+  errors). Digitization's SPs read only `tbl_ocr_data`, so nothing changes
+  for them.
+- Tested (dry runs, `worker.js --file … --double`): no flag / master switch
+  off → Tesseract never runs; Sonu Tata → RapidOCR 52 rows unchanged +
+  Tesseract DONE 56 rows (its own "387" Lymphocytes, "4.31" A/G); Tesseract
+  service down → RapidOCR result + Tesseract FAILED; digital PDF → Tesseract
+  DONE, 0 rows, remark.
+- **Tested end to end on `health360_dev` (Nov 3–5)**: the user applied the
+  SQL there; a local build of the OCR API pointed at `health360_dev`
+  (`worker.js --file … --case 1534 [--double]`). The flow works:
+  - Report 170, single OCR: 48 rows, Tesseract never ran. Report 171, double
+    OCR: RapidOCR 19 rows, Tesseract DONE with 16 rows. Report 172, Tesseract
+    service down: RapidOCR result saved, Tesseract FAILED. Report 173, master
+    switch off: Tesseract never ran. Report 174, digital PDF: Tesseract DONE,
+    0 rows, with a remark.
+  - All 71 PDFs in `D:\Dummy Reports` with double OCR (reports 175–245,
+    case 1534, 1 150 OCR'd pages, about 1.5–2.5 min per uncached file):
+    71/71 DONE, 71/71 Tesseract DONE, 0 failures, `second_ocr_engine_id` =
+    TESSERACT on all of them.
+  - Rows: RapidOCR 2 702 (2 287 mapped to PIMS tests), Tesseract 2 801.
+  - Per test (report + `param_code`, 2 493 tests):
+    - 2 054 had the same value from both engines: **96 % agreement** where
+      both engines found the test.
+    - 86 had different values. In 20 of them Tesseract dropped the decimal
+      point ("32.6" → "326"); in 0 did RapidOCR. The rest are mostly
+      Tesseract misreads ("15.6" → "13.6", "1.025" → "21.025"). A few are
+      RapidOCR rows taking a range as the value (CHOL "<200", LDL "<130")
+      → worth a look in the rules parser.
+    - 216 were found only by RapidOCR and 137 only by Tesseract.
+  - 9 reports had 0 RapidOCR rows (no lab pages). On 3 of them (198, 226,
+    243) Tesseract saved 1–10 junk rows read from ECG/graph pages it took
+    for lab pages. They sit only in the comparison tables.
+  - **Dharani DC batch (Nov 5–6)**: 54 PDFs from `D:\dharani dc dummy
+    reports`, one lab template, 1 452 OCR'd pages. Reports 248–302 on case
+    1534; 296 is FAILED, re-run as 302.
+    - Result: 54/54 DONE, 54/54 Tesseract DONE.
+    - Report 296 hung about 15 h, most likely because the laptop slept. The
+      API's stuck sweep marked it FAILED, so the worker's late save was
+      refused ("not claimed by this worker"). Re-run as 302; not a
+      double-OCR bug.
+    - Rows: RapidOCR 2 394 (2 045 mapped), Tesseract 2 556.
+    - Per test, 2 128 tests: 1 936 had the same value (**97.6 %** of the
+      tests both engines found), 47 had different values, 82 were found
+      only by RapidOCR and 63 only by Tesseract.
+    - **Accuracy, hand-checked against the page images** (Budda Subbaiah =
+      report 252, Pagadala Sambaiah = 269; 95 real results):
+
+      | | Correct | Wrong value | Missed |
+      |---|---|---|---|
+      | RapidOCR | 90 / 95 (94.7 %) | 1 | 4 |
+      | Tesseract | 85 / 95 (89.5 %) | 4 | 6 |
+
+      Every value where both engines agreed was correct. Tesseract's errors
+      are dropped decimal points (TP 7.2 → 72, RBC 5.1 → 51, TG/HDL 2.12 →
+      212) and a range read as the value (HDL ">40.00"). RapidOCR's error:
+      HBsAg "688" instead of "Negative(-)ve".
+    - Found in the hand-check (open, parser/classifier side, affects single
+      OCR too):
+      1. **Fixed Nov 6.** Many Dharani PDFs have a GPS-camera photo of the
+         patient in front of the lab's **price board**, and the classifier
+         called it a lab page: prices became results (INSULIN 1300, HBsAg
+         500). Report 255 has only this page.
+         - New general rule in `pageClassifier.js`: a "menu line" is a line
+           with two or more "test name + round price" pairs ("IRON 500
+           LIPASE 700") and no range. A page with ≥ 5 of them is a price
+           list / test menu → `other`. It is checked before the lab rules,
+           because prices parse as confident rows.
+         - All 8 717 cached pages (every engine and sample set): only
+           price-board photos have ≥ 2 menu lines. RapidOCR has 11–27 on
+           each of 5 pages; Tesseract 13 and 23 on 2 pages, plus 2 garbled
+           ones (1–2 lines) it cannot catch. No real lab page has more
+           than 1.
+         - Page key unchanged: 149/149 pathology pages found, 199/200
+           non-pathology kept out. The 71-file Dummy folder is unchanged
+           row for row.
+         - Dharani batch: 82 RapidOCR and 37 Tesseract junk rows removed,
+           no real result lost. Side effects: HbA1c in Syamala Sujatha
+           now gets its correct page (15, was 12); 1 new junk row there
+           (CHOL "68.0" from a footnote sentence plus a garbled logo line,
+           item 5).
+         - Copied identically to `tesseract-ocr/` and `unlimited-ocr/`.
+         - The rows already saved in `health360_dev` are not re-run.
+      2. Only the first row of the HIV 1 & 2 block is read; HIV 2 and the
+         final result are missed.
+      3. MCHC is mapped to HB.
+      4. The test on a one-test page is saved with an earlier page number
+         (FBS on page 19 saved as page 17); the value is right.
+      5. A few footnote rows: "Gender = Normal", "Certain medications =
+         68", a second HbA1c row "<5.7" taken from the range.
+  - Fixed Nov 5: `sp_save_ocr_tesseract_result` used to set
+    `second_ocr_engine_id` = TESSERACT even for a digital PDF Tesseract had
+    nothing to read; now only on DONE with `p_ocr_page_count > 0`. Applied
+    on `health360_dev`. Checked: report 246 (digital PDF) is NULL; report 247
+    (7 OCR'd pages) is TESSERACT.
+  - Dev test data (reports 170–302 on case 1534) is still there.
+  - UAT rollout: see "UAT go-live" below.
+- Note: the parent repo's `database/` folder was restructured (per-table
+  dumps) since Oct 22 — the Oct 22 scripts (`ocr_double_ocr.sql`, edits to
+  `ocr_extraction_sps.sql`) are gone from disk; their schema is in the dump
+  (`double_ocr`, `ocr_engine_id`, `second_ocr_engine_id`, `confidence`,
+  `confidence_note`, lookup `OcrEngine`). The worker SPs' new signatures are
+  not in the dump, so they can't be confirmed from the repo.
+
+## Double OCR: Tesseract as a second engine (Oct 22, 2026)
+
+*Superseded Nov 2: the merge described here was removed — see "Double OCR
+redone as comparison only" above. The engine flags, Tesseract service and the
+measurements below still hold.*
+
+Decision (user): build Tesseract as its own approach in a new folder
+(`tesseract-ocr/`), keep the classification / parsing logic unchanged, and
+add **double OCR** for chosen reports: read the scanned pages with two
+engines and keep, per test, the value they agree on. Decisions taken with
+the user:
+- **Engine flags** (`paddleocr/ocrEngines.js`, `.env`): `OCR_PRIMARY_ENGINE`
+  (paddle / tesseract / gemini), `OCR_ENGINE_{PADDLE,TESSERACT,GEMINI}_ENABLED`
+  (Gemini = reserved slot, not built — choosing it is refused),
+  `OCR_DOUBLE_ENABLED`. The second engine for double OCR is **always
+  Tesseract**.
+- **Double OCR is per report:** global master switch **and** a per-report
+  flag (`tbl_ocr_report_details.double_ocr`, default 0 — set by hand for now;
+  `--double` on the CLI tools; checkbox on `/select.html`).
+- **Merge** (`paddleocr/doubleOcr.js`): both readings go through the same
+  pipeline; rows paired by page + dictionary test (or a near-identical name,
+  so one engine misreading a letter doesn't split a test in two). Same value
+  → HIGH, engine `PADDLE_TESSERACT`; different values → the row that
+  validates better (parser confidence, flags, range parsed, value checkable),
+  MEDIUM, note with the other value; only one engine found it → MEDIUM.
+  Text-layer pages are never compared (`TEXT_LAYER`); a fully digital PDF
+  never runs the second engine.
+- **Engine recorded in the DB** as lookup `OcrEngine` (PADDLE, TESSERACT,
+  GEMINI, PADDLE_TESSERACT, GEMINI_TESSERACT, TEXT_LAYER): per row
+  `tbl_ocr_data.ocr_engine_id` + `confidence` (re-added; HIGH/MEDIUM/LOW) +
+  `confidence_note`; per report `ocr_engine_id` / `second_ocr_engine_id`.
+  Parent repo: `database/tables/ocr_double_ocr.sql`, SPs updated
+  (`sp_claim_ocr_report` → DoubleOcr, `sp_save_ocr_result` 15 fields per row
+  + engines, `sp_insert_ocr_manual_report` p_double_ocr), OCR API DOs / BAL /
+  DAL updated (builds, 0 errors).
+
+Built: `tesseract-ocr/` (`tesseract_text_service.py`, port 8799, same `/ocr`
+contract as `paddle_text_service.py`: Tesseract 5 LSTM eng, psm 6, scale to
+2400 px, gaps → tabs; every `.js` copied from `paddleocr/`, identical; demo
+on 8800). `paddleText.js` → `ocrClient.js` (one client for every engine);
+`pageReader.js` / `pipeline.js` take the engine; `documentParser.js` now puts
+the row's page on each row (copied to `unlimited-ocr/`); worker, server,
+`test-extract.js`, `batch-eval.js`, `page-eval.js` take an engine / `--double`.
+
+Checked: the refactor changed **nothing** in paddleocr's output — 26 files of
+the page key, 1050 rows, identical text fields before/after (committed HEAD
+vs. new code, same OCR cache); `page-eval.js` still 147/147 + 126/126; the
+merge rules on synthetic rows (agree, misread name, disagreement → better
+validation wins, one-engine-only, text layer) behave as above.
+**First real run (Oct 22, same day — Tesseract 5.5.3 installed at
+`C:\tesseract-ocr`, which the service now also looks in).** All 26 files of
+the page key (23 with scanned pages, 189 OCR'd pages), PaddleOCR (RapidOCR)
+primary + Tesseract second:
+- **Speed:** Tesseract **1.2 s/page** (vs RapidOCR ~6.6 s/page) — double OCR
+  adds ~20 % to a scan's reading time.
+- **Tesseract alone:** 1054 rows, **903 with a dictionary code** (PaddleOCR:
+  1050 / 987). Weak spot: values in **bordered table cells / handwritten
+  entries** — `ANISHA TATA` gave 1 row vs PaddleOCR's 30 (it drops the cell
+  values, keeps the printed labels). Clean printed scans (Sonu, Shubham,
+  Kalpesh, Vinod) agree almost completely.
+- **Double OCR, rows on OCR'd pages** (440 from PaddleOCR): **319 agree
+  (72 %, HIGH)**, 15 disagree, 106 only PaddleOCR found (MEDIUM — mostly the
+  bordered-cell files above), 9 only Tesseract found and kept (dictionary
+  tests PaddleOCR missed); **93 Tesseract-only junk rows dropped**.
+- **Disagreements resolved:** 14 of 15 kept the plausible value — e.g.
+  Lymphocytes 37 vs Tesseract "387", A/G 1.31 vs "4.31", PCV 48 vs "8", Uric
+  Acid Tesseract 3.46 kept over PaddleOCR "46" (the one real PaddleOCR misread
+  in the set). The 15th is a duplicate HDL row both engines garbled (Vinod, a
+  shifted lipid table). Judged by plausibility against ranges/units — not
+  checked against the page images.
+- Fixes this run forced in `doubleOcr.js` (general, not per report): (1) rows
+  only carry their section's first page and the two readings can start a
+  section on different pages → pairing now also matches the same test **one
+  page away** (Sonu's whole lipid panel was duplicated before); (2) rows
+  **only Tesseract** found are kept only if the dictionary knows the test —
+  otherwise dropped (letterhead, address, "MBBS 4", garbled lines; listed in
+  `ocr.stats.secondaryOnlyDropped`) — a refinement of "one engine only →
+  MEDIUM" for the second engine; (3) a recognised result word ("Negative",
+  "Pale Yellow") scores like a range-checked number (HIV "Negative" had lost
+  to a stray "2" from "2nd"; "2+" kept as a grade, not "2").
+- **Layout mode:** psm 4 vs the default psm 6 over the same batch: same
+  agreement (319), less junk (22 dropped vs 93), better on some files and
+  worse on others → **default stays psm 6**; psm 4 found every value of
+  ANISHA p1 in isolation but only 2 more agreeing rows over the whole file.
+  The psm 4 page cache is kept in `paddleocr/ocr-cache/tesseract-psm4/`.
+
+**UAT go-live (Nov 18):** steps 1–2 done by the user (checked: UAT's
+schema and the 4 procedures now byte-identical to dev; API live at
+`http://192.168.40.45:8012/` with `SaveTesseractResult`, 401 without a key,
+the worker's key accepted). Next: step 3 on a server —
+`paddleocr/deploy/SERVER_SETUP.md` (new; `paddleocr/requirements-rapid.txt`
+added and checked in a fresh venv: installs, boots, reads a real page). The
+frontend and main PIMS backend need no change: double OCR has no UI, and
+digitization's SPs are untouched.
+
+Before the rollout UAT had only the `OcrEngine` lookup; missing were
+`double_ocr` / `ocr_engine_id` / `second_ocr_engine_id` (report),
+`ocr_engine_id` / `confidence` / `confidence_note` (data), the two Tesseract
+tables, `sp_save_ocr_tesseract_result`, and the dev versions of
+`sp_claim_ocr_report`, `sp_insert_ocr_manual_report`, `sp_save_ocr_result`
+(21 parameters; the new API sends 23).
+
+Order (the new API calls the new `sp_save_ocr_result`, so the DB goes first;
+the new worker also works against the old API — it then just never
+double-OCRs):
+1. **SQL** — parent repo
+   `database/stored_procedures/ocr_double_ocr_uat_rollout.sql`, generated from
+   `health360_dev`: adds the 6 columns if missing, creates the 2 tables if
+   missing, re-creates the 4 procedures (no DEFINER). Run in Workbench or
+   `mysql --comments --default-character-set=utf8mb4` (the plain client
+   strips procedure comments / mangles non-ASCII). Proven on dev Nov 18:
+   no errors, procedures byte-identical afterwards. (While building it a
+   first, broken version dropped `sp_claim_ocr_report` on dev for a few
+   minutes — restored from `dev_sp.sql`, hash-checked identical.)
+2. **OCR API** — publish `backend/Health_360_OCR` (builds, 0 errors) with
+   `health360_uat` in `appsettings.json`; `deploy/install-service.ps1` on a
+   server, or run it as before.
+3. **Worker machine** (full guide: `paddleocr/deploy/SERVER_SETUP.md`) —
+   Tesseract installed (UB Mannheim build),
+   `tesseract-ocr/.venv` set up, then `paddleocr/deploy/install-tasks.ps1`:
+   it now also registers "Health360 OCR Tesseract Service"
+   (`deploy/run-tesseract-service.cmd`, port 8799; skipped if the venv is
+   missing — tested by hand Nov 18). `paddleocr/.env`:
+   `OCR_DOUBLE_ENABLED=true` (`.env.example` now lists every worker setting).
+4. **Pick reports** — nothing sets `double_ocr` automatically. For testing:
+   `UPDATE tbl_ocr_report_details SET double_ocr = 1, ocr_status_id = <QUEUED>,
+   attempt_count = 0, locked_by = NULL, error_message = NULL WHERE
+   ocr_report_id IN (...)` (a re-run replaces the report's earlier rows), or
+   `node worker.js --file <pdf> --case <id> --double`.
+5. **Check** — `tbl_ocr_tesseract_report` (DONE / FAILED per report) and the
+   per-test comparison of `tbl_ocr_data` vs `tbl_ocr_data_tesseract` on
+   `ocr_report_id` + `param_code`.
+
+Open: Tesseract on bordered/handwritten tables (preprocessing such as
+table-line removal is the obvious next experiment); a rule for which
+reports get double OCR.
+
+## Automatic processing: sweep + services (Oct 12, 2026)
+
+Decision: no MySQL event scheduler — events can only run SQL (the work
+is PDF reading + RapidOCR + Node), and on MySQL 5.5 the event scheduler is
+a server-wide switch. The worker already polls the queue every 5 s; what
+was missing was (a) files that never got queued and (b) keeping the
+processes running.
+
+- **Sweep** — `sp_queue_missed_ocr_reports` (parent repo
+  `ocr_extraction_sps.sql`) + `api/Ocr/QueueMissedReports`; the worker
+  calls it on start and every `OCR_WORKER_SWEEP_MINUTES` (10), max
+  `OCR_WORKER_SWEEP_MAX` (200) files per run. Finds QC-passed pathology
+  files with no queue row (UAT had 31 across 25 cases, mostly from before
+  OCR existed).
+- **Services** — API: `backend/Health_360_OCR/deploy/install-service.ps1`
+  (Windows service `Health360OcrApi`, `UseWindowsService()`, plain HTTP on
+  localhost:5235 by default). OCR text service + worker:
+  `paddleocr/deploy/install-tasks.ps1` (boot-time scheduled tasks as
+  SYSTEM, each running a `.cmd` restart loop with a log). Nothing extra to
+  download (no NSSM / PM2).
+- **Tested** (nothing installed — the installers need admin and are a
+  deliberate server change): published API run as the service would
+  (`OCR_API.exe --urls http://localhost:5235`, 401 without a key); both
+  `.cmd` launchers; worker started by `run-worker.cmd` with sweep max 3 →
+  swept 3 files (2 new cases), also drained reports 7–10 that real report
+  QC on UAT had queued (cases 1327–1332, non-lab images → 0 rows); killed
+  the worker → launcher restarted it, its start-up sweep queued the next 3;
+  one of those (`photo55.png`) failed 3× ("not a valid image/png") →
+  FAILED; no upload file queued twice. Installer scripts parse in Windows
+  PowerShell 5.1 — after removing em dashes, which 5.1 misreads in
+  BOM-less files and which broke the parse. **25 missed files remain** on
+  UAT for the sweep once the worker runs for real.
+
+## OCR insertion API — worker goes through ASP.NET, not the DB (Oct 9, 2026)
+
+New separate solution in the parent repo, `backend/Health_360_OCR`
+(ASP.NET Core 8, same 4-layer layout as the PIMS backend: OCR_API /
+BusinessAccessLayer / DataAccessLayer / DataObject). Endpoints wrap the OCR
+SPs one-to-one; new SP `sp_insert_ocr_manual_report` replaces the worker's
+direct INSERTs for `--file --case`. `worker.js` now uses `ocrApiClient.js`
+and has no DB credentials (mysql2 removed).
+
+**Auth = API key, not the PIMS login.** First built with the PIMS model
+(JWT login as a PIMS user + RSA/AES envelope); dropped the same day by
+decision — the caller is a service, and a dedicated PIMS user account was
+overhead. Now every `api/Ocr/*` call carries `X-Api-Key` (=
+`OcrApi:ApiKey` in the API's appsettings = `OCR_API_KEY` in
+`paddleocr/.env`), plain JSON; rows get `OcrApi:SystemUserId` (1) as
+`inserted_by`. Gotcha: with nullable reference types on, ASP.NET treated
+every non-nullable `string` in the request DOs as required (400 on a
+report with no lab name) — switched off in `Program.cs`.
+
+Tested end to end on UAT through the API: no key / wrong key → 401;
+`RequeueStuckReports` ok; empty queue → `ClaimReport` 404; manual upload
+(Khandelwal PDF → case 1179) → 63 rows, 16 MAPPED / 46 TEST_ONLY /
+1 UNMAPPED, min/max filled; queued path (`worker.js --once`): attempt 1
+failed with the OCR service down → re-queued (not FAILED), attempt 2 →
+DONE, 15 rows; fake PDF (case 1188) → FAILED with the file-type error;
+`ReapplyTestMapping` ok. Test rows left on UAT: ocr_case_id 1–4.
+
+## Reference range split into min / max (Oct 9, 2026)
+
+`validate.js` now adds `range_min` / `range_max` to every row of the
+pipeline output — since Oct 12 as **text, each number exactly as printed**
+(`"0.10"`, not 0.1; `null` = open end or not parseable); the printed range
+stays in `range`. The worker inserts these straight into
+`tbl_ocr_data.min_range` / `max_range` (VARCHAR since Oct 12).
+
+**Oct 12 — `tbl_ocr_data` slimmed down** (by decision): dropped
+`value_num` (result stored once, as printed, in `value`), `flag`,
+`confidence`, `extraction_method`, `row_seq` (order = `ocr_data_id`),
+`mapping_status`, `is_expected` (mapping still in `test_id` /
+`sub_test_id` / `ocr_test_mapping_id`) — parent repo
+`database/tables/ocr_data_column_cleanup.sql`, applied on UAT;
+`sp_save_ocr_result` now takes 12 fields per row. Re-tested through the
+API (Khandelwal PDF → case 1298, report 13): 63 rows, min/max as printed
+("0.10" / "0.28", "Up to 40" → NULL / "40"), 16 mapped to a sub-test /
+46 test level / 1 unmapped. The high/low flag still exists in the
+pipeline output (`validation.status`, kept in `result_json`), just not
+as a column.
+Same splitter drives the high/low flag. Universal rules added — no
+per-report fixes:
+
+- `13.0 – 17.0` (en/em dash), `13 to 17`, `Upto 40`, `<=`/`≥`,
+  `0.6-1.2 mg/dL` (unit after the range), `.51` (no leading zero — was
+  read as 51).
+- **Sex-specific ranges** (`Male: 13-17 Female: 12-15`, `M … F …`): the
+  half matching `patient.sex`; unknown sex → unchecked. Previously the last
+  (female) half was always used — wrong min/max and flags for men.
+- **Interpretation tables** (≥2 labelled segments with numbers): the
+  healthy-labelled segment (normal / non-diabetic / desirable /
+  sufficient / optimal / negative, not "near/borderline/pre"), else the
+  adult segment, else a leading unlabelled range; none → unchecked
+  (cardiac risk tables).
+
+Checked over every distinct row in all 84 saved `04_validated.json` runs
+(617 rows; gold set is still empty, so `gold-eval.js` can't gate this):
+ranges parsed 349 → 371; 27 rows unchecked → normal (e.g. `Upto 190`,
+`07 to 35`, trailing `*`), Vitamin D 21.5 and eGFR 66 high → low (correct:
+below "Sufficient" / "Normal ≥ 90"), 3 risk-table rows low → unchecked;
+no previously-correct flag lost. Copied to `unlimited-ocr/`,
+`hybrid-ocr/`, `regex-based/` (kept identical).
+
+## PIMS integration: DB queue + `worker.js` (Oct 8, 2026)
+
+Decided flow: **OCR runs first, digitization uses the result later.**
+When report-upload QC passes for every report of a case
+(`sp_update_qc_remark`, status 22 — the same transaction that creates
+`tbl_digi_master`), the case's pathology PDFs
+(`tbl_report_upload_document.Group_test_type_id = 3`) are queued. Paths
+come from `tbl_report_upload_document` (not `tbl_digi_files`, which is only
+filled during digitization). After QC there is no re-upload, so each PDF
+is OCR'd once.
+
+- **3 tables** (parent repo, `database/tables/ocr_extraction_tables.sql`):
+  `tbl_ocr_case_list` (case), `tbl_ocr_report_details` (one per PDF — also
+  the work queue; holds header fields, raw text, full JSON),
+  `tbl_ocr_data` (one row per test). Statuses in `tbl_lookup_master`
+  (`OcrCaseStatus`, `OcrReportStatus`). utf8.
+- **Tests are stored as printed** (`test_name_raw` + our own
+  `param_code`) **and mapped** to `tbl_test_master` / `tbl_subtest_master`
+  through a data-driven table, `tbl_ocr_test_mapping` (param_code →
+  test_id + optional sub_test_id; parent repo
+  `database/tables/ocr_test_mapping.sql`, **applied on UAT Oct 9**: 105
+  seed rows). Tested: the queued Blood_Report re-processed through the
+  worker → 14 CBC rows TEST_ONLY + is_expected 1, junk row UNMAPPED; in a
+  rolled-back transaction ALT/TBIL → MAPPED, DBIL → TEST_ONLY, Vitamin D →
+  UNMAPPED, and CRP / cotinine switched to HS-CRP / blood cotinine once the
+  case ordered those. Seed gotcha: `tbl_test_master` is latin1 — name
+  comparisons are done via `CONVERT(… USING utf8mb4)`. Ambiguous codes
+  resolve to whichever test the case ordered (`tbl_digi_test_details`).
+- **Re-mapped Oct 13, 2026 to the corrected masters.** The pathology
+  masters were rebuilt with new ids (CBC now has Hb … basophils as
+  sub-tests, LFT/RFT/URA got real sub-tests), which made the old rows point
+  at wrong tests (ESR → "Total RBC Count"). The seed moved to a re-runnable
+  sync, `database/tables/ocr_test_mapping_seed.sql` (name-matched list;
+  inserts missing, deactivates unlisted): 103 active rows, all names found.
+  `sp_reapply_ocr_test_mapping` on UAT: 7 reports, 290 rows to a sub-test,
+  78 test-level only (CBC absolute counts, MPV/PCT/PDW, ratios, urine
+  microscopy), 25 unmapped (HbA1c/eAG and HIV — not in the master — plus 7
+  null-code junk rows); 0 rows whose sub-test belongs to another test;
+  a second seed run changes nothing.
+- **Insert-only for now** — no API, no read SPs.
+- **`worker.js`** polls the queue (claim is one atomic
+  `UPDATE … LIMIT 1`, so several workers never share a report), runs
+  `pipeline.js`'s `extractDocument()` (moved out of `server.js` unchanged —
+  confirmed identical output on the Khandelwal report, 11 reports / 63
+  rows), and saves via SPs. Default engine `rules` (no LLM).
+- **Deployed on UAT** (`health360_UAT`, MySQL **5.5.45**,
+  `max_allowed_packet` 1MB → raw text / JSON capped at 250K chars each):
+  tables, SPs, QC SP change and lookups (ids 103–111) confirmed present;
+  `node worker.js --once` against the empty queue connects and calls the
+  SPs correctly.
+- **First end-to-end run on UAT (Oct 9):** queued manually (same INSERTs
+  as the QC SP; `tbl_ocr_case_list.ocr_remark = 'MANUAL TEST …'`,
+  ocr_case_id 1 / ocr_report_id 1) — `report_upload_id 470`, case 1046,
+  `Blood_Report.webp` (a Drlogy sample CBC image). Claimed → downloaded →
+  OCR'd (1 page) → saved in 8 s: 14 CBC rows all correct (values, units,
+  min/max, low/high flags), plus 1 junk `OTHER` row (the lab's phone
+  number); case → COMPLETED, report → DONE. No patient name or dates were
+  read from that header (name_match NULL).
+- **Manual test mode (Oct 9):** `node worker.js --file <report> --case
+  <case_id>` queues a local file for a case and runs the real
+  save/mapping path, skipping upload + QC. Khandelwal PDF → case 1272
+  (ordered CBC/ESR/FBS/HbA1c/HBsAg/HIV/LFT/LIPID/RFT/RUA): 63 rows in 7 s;
+  15 MAPPED to their own sub-test (ESR, FBS, HbA1c, HBsAg, HIV, LFT
+  ×5, lipid ×3, creatinine, BUN), 46 TEST_ONLY (CBC, extra LFT/HbA1c
+  values, urine), 1 cotinine MAPPED but not ordered, 1 junk UNMAPPED;
+  name_match 0 (different patient — the check works).
+- **UAT file reality:** of 61 active pathology uploads, only 45 files
+  exist on the report-upload server, and they are almost all test junk
+  (logos, screenshots, an MOU) — no real digital lab PDF. A missing file
+  comes back as **HTTP 200 + the frontend's index.html** (SPA fallback),
+  so the worker now checks the file's magic bytes before parsing.
+  **Oct 13:** the type now comes from those bytes, not the extension —
+  3 UAT uploads were JPEGs named `.png` and had failed 3× as "not a valid
+  image/png"; re-queued, they went through. Oct 15: any PDF or image is
+  accepted whatever the extension (TIFF / BMP / GIF added; also in the
+  `--file` test modes) — the Blood_Report saved as TIFF-named-.png,
+  BMP-named-.pdf, GIF-named-.jpg and JPEG-named-.webp gave the same 15 rows.
+- **Oct 16 — new UAT DB, Single Group uploads, pathology pages, classifier
+  + parser fixes.**
+  - **UAT moved** to MySQL 8.0 `103.196.76.110:3306 / health360_UAT`
+    (copy of the old DB taken Oct 15 ~09:40). The OCR API still pointed
+    at the old server, which refuses connections → every ClaimReport
+    failed ("failed to claim"). Fixed in `OCR_API/appsettings.json`.
+    MySQL 8 user names are case-sensitive (`health360@%`), so the OCR SQL
+    files no longer hard-code `DEFINER=Health360@%`. The scheduler,
+    job log, split SPs and TGHDL mapping were re-applied there.
+  - **Single Group uploads** (`Group_type_id = 45`: one file with the
+    whole case, `Group_test_type_id` NULL) were never queued — case 1384
+    passed QC and got nothing. Queue rule now (QC SP block 3.7.1 + sweep):
+    `Group_test_type_id = 3` OR `Group_type_id = 45`. MTRF / MER / Special
+    Report group files and identity documents stay out (user decision).
+    The scheduler's first run on the new DB queued 37 Single Group files
+    on 29 cases.
+  - **`pathology_pages`** column on `tbl_ocr_report_details` ("3,4,5"):
+    worker → API `PathologyPages` → `sp_save_ocr_result`.
+  - **Page answer key**: all 279 pages of 26 files (15 insurer case files
+    + 4 other reports + 7 UAT uploads) read and labelled by hand →
+    `review-data/page-key.json`, scored by `page-eval.js`. Before: 142/147
+    pathology pages found, 118/126 non-pathology kept out (ECG reports on a
+    lab letterhead and Aadhaar cards called lab; single-test HIV pages and
+    urine continuation pages missed). Fixes in `pageClassifier.js`
+    (ECG/radiology/ID vocabulary veto, single-test rule, continuation of
+    the previous lab page) → 147/147 and 126/126 — on the same pages the
+    rules came from, so new files are the real test.
+  - **Parser leftovers fixed** (all general, judged by a before/after row
+    snapshot over the same 27 files — no `review-data/gold` keys exist yet):
+    remarks column after the value dropped (11 urine results recovered on
+    3 files), "Not present" added to qualitative values, "unit⇥range"
+    continuation lines, bare `cumm`/`cmm` units (units no longer stuck on
+    names on 5 more files), phone numbers / "End of report" / "Page x of
+    y" never rows, "Cholestrol" misspelling (3 labs) on CHOL/LDL/HDL/VLDL,
+    BUN/Creatinine and Urea/Creatinine ratios. Header: per-cell
+    "Label : value", one-cell-per-line header rebuild (Labsmart now gives
+    name, age, sex, doctor, dates), credential lines block only ID
+    fields (Drlogy age back) — 12 files' headers better, none worse.
+    Totals since Oct 15: rows 1056 → 1064 (junk out — incl. Aadhaar
+    numbers that used to reach tbl_ocr_data — results in), rows with a
+    code 961 → 1001. Copies synced to `unlimited-ocr/`.
+  - **MySQL 8 broke two things, found by the end-to-end run:** (1) every
+    save inserted **0 rows** ("312 malformed row(s) skipped" = 26 rows ×
+    12 fields): the DB default collation `utf8mb4_0900_ai_ci` treats
+    control characters as ignorable, so `LOCATE(CHAR(30), …)` in
+    `sp_save_ocr_result` also matched `CHAR(31)`. Fixed: the split uses
+    `utf8mb4_bin` variables. (2) strict mode rejects a 4-byte character
+    (📞 on a train ticket) in the 3-byte `raw_text` column → the whole save
+    rolled back; `OcrBAL` now strips 4-byte characters from RawText /
+    ResultJson too (row fields already were). Also: that ticket's
+    passenger list had been classified as a lab page (names + ages look
+    like rows) → ticket / railway / salary-slip words added to the
+    non-pathology vocabulary (page key still 100%, no row changes).
+    After the fixes the whole UAT queue was re-processed: 84 DONE, 6
+    FAILED (5 files missing on the report server, 1 old), 843 rows, 686 on
+    a sub-test, 41 files with pathology pages. Case 1384 (Single Group,
+    Babita PDF): pages 1–7 pathology, 63 rows; `name_match_flag = 0` —
+    the report's patient is not the case's client (a test upload).
+- **First real lab reports through the full PIMS path, Oct 15:** 15
+  files queued by real QC passes (cases 1388–1395; really 2 distinct
+  uploads: a 3–4-page merged CBC/lipid/KFT/RBS PDF ×3 and a 4-file set —
+  Labsmart CBC+ESR, Drlogy RBS, LFT, KFT — ×3) → all DONE, 167 rows, 119
+  linked to a sub-test, 12 test level only. Parser gaps it showed:
+  1. **FIXED Oct 15 — CBC flags / split names / look-alike letters.** The
+     Labsmart text layer puts one cell per line, so (a) the H / L flag sat
+     on its own line between name and value and was taken for the test
+     name (Hb, MCV, MCHC, RBC, ESR lost), (b) "TOTAL" ⏎ "LEUKOCYTE" ⏎
+     "COUNT" left only "COUNT" → Sperm Count (WBC, platelets), (c) the font
+     wrote "HЕМАТOCRIT"/"HСТ" with Cyrillic letters (PCV lost). Fixes:
+     `rowParser.js` drops flag-only cells/lines and rejoins trailing short
+     name fragments when that names a known test better (a lone generic
+     word like "COUNT" never counts as a name); `textNormalize.js` folds
+     Cyrillic/Greek look-alikes inside Latin words.
+  2. **FIXED Oct 15 — ratios filed under one of their tests.** Words of
+     "TOTAL CHOLESTEROL/HDL" are those of Total Cholesterol + HDL, so the
+     longest-synonym match picked Total Cholesterol ("TG/HDL" → HDL). Now
+     `matchParam` treats a name as a ratio when it says "ratio", or is
+     "A / B" with A, B different tests of the same report type and no
+     measurement unit — then only ratio entries can match (none → no
+     code). New entry `TGHDL` (TG / HDL Ratio, mapped test-level to Lipid
+     Profile); `ASTALT` also accepts plain "SGOT/SGPT". Known edge: an
+     unit-less "Blood Urea / BUN" now gets no code (urea and BUN are
+     separate entries).
+     **Batch check** (no gold answer key exists yet, so a before/after row
+     snapshot over 27 files: the 15 insurer reports in Downloads/REPORTS,
+     4 other real reports, the 6 UAT uploads, Blood_Report): every changed
+     row is a correction, nothing lost — rows 1056 → 1074, rows with a
+     code 961 → 985. Other labs gained: "SGOT/SGPT" ratio coded on 6
+     reports, "S.Triglycerides/HDL" / "TG/HDL" moved off TG/HDL onto TGHDL
+     on 3. The 15 UAT reports were re-processed: 203 rows, 164 on a
+     sub-test (was 167 / 119). On that CBC "cumm" / "million/cumm" were
+     fixed Oct 16; ESR's "mm for 1st hour" (split over 4 lines) and the
+     WBC range split over 3 lines are still not captured.
+  3. **Header empty on all 15** — FIXED Oct 16 (see that entry): Labsmart
+     now gives name / age / sex / doctor / dates, Drlogy age / sex / PID /
+     doctor (its unlabeled, untitled name "Yash M. Patel" stays unknown).
+  4. Footer/letterhead rows — FIXED Oct 16. Still open: "SGPT (ALT) U/I"
+     (OCR's "U/I" for U/L, one lab — left as is by the design rule); ALP
+     "11" with no range.
+- **MySQL scheduler, Oct 15 (applied on UAT):** the database now fills the
+  queue; the worker no longer sweeps (its `OCR_WORKER_SWEEP_*` /
+  `OCR_WORKER_STUCK_MINUTES` settings are gone). Event
+  `ev_queue_ocr_reports` (every 10 min) → `sp_job_queue_ocr_reports`:
+  re-queue reports stuck > 30 min, queue QC-passed pathology files not
+  queued yet (max 200), log the run in `tbl_ocr_job_log`; `GET_LOCK` stops
+  overlapping runs (logged SKIPPED). The two existing SPs were split into
+  internal `sp_run_*` versions (OUT params, no result set) + the old names
+  as API wrappers. Report QC (`sp_update_qc_remark` 3.7.1) still queues
+  instantly — confirmed in real use: QC passes on Oct 14 queued 15 real
+  lab-report PDFs (cases 1388–1395). Tested: the event fired on its own
+  (SUCCESS), a faked stuck report was re-queued, a faked missed file was
+  queued on its existing case (case re-opened), a run under a held lock
+  was SKIPPED, the API wrappers still answer; all test rows restored.
+  Teammate's digitization event (`ev_insert_OCR_digitization_data`) left
+  untouched.
+- **Full UAT run, Oct 13 (OCR tables truncated first):** the sweep queued
+  all 37 QC-passed pathology files (30 cases; 28 more files on 26 cases
+  have not passed QC → not eligible, `digi_id` is required). Result: 32
+  DONE, 5 FAILED — all 5 missing on the report-upload server (one, case
+  1357, has a file_path pointing into case 1298's folder). Cases: 26
+  COMPLETED, 4 FAILED. Only one real lab report among them
+  (`Blood_Report.webp`, case 1046): 14 CBC rows, all mapped to their CBC
+  sub-tests, plus 1 junk header row; the rest are screenshots / photos /
+  an MOU giving OTHER rows (all saved, unmapped).
+  `.webp` added (the DC upload screen allows it; Pillow reads it).
+- **OCR-cache bug found (web demo still affected):** `pageReader.js`
+  caches OCR'd pages by *file name* only, so two different uploads with
+  the same name share cached text. The worker avoids it by prefixing the
+  file's sha256; `server.js` / `batch-eval.js` uploads are not fixed yet.
+- Dry run on the Khandelwal report also shows a parser junk row
+  (`"Please Note Page" = 2`, range "of 7") — the page footer leaking in as
+  a test; a universal footer filter is a parser to-do.
 
 ## `paddleocr/` rebuilt as the default pipeline, PaddleOCR as its OCR engine (Sept 30, 2026)
 
@@ -1835,6 +2489,12 @@ sections → `needsFallback` (LLM or review), not wrong rows; `Hb 136 g/dL`
 
 ## Suggested next steps, roughly in order
 
+- **(Oct 22) Double OCR:** measured (72 % of OCR'd tests agree, 14/15
+  disagreements resolved plausibly, Tesseract 1.2 s/page). Next: the UAT
+  rollout (prepared Nov 18 — SQL script, deploy scripts; see "UAT
+  go-live"), decide which reports get `double_ocr = 1`; then Tesseract
+  preprocessing for bordered tables.
+
 0. **Fix categorization before trusting any further accuracy numbers**
    (see "Categorization confirmed as the real bottleneck" above — this
    is now the highest-priority item, ahead of the `qwen3:4b` item below,
@@ -1873,9 +2533,10 @@ sections → `needsFallback` (LLM or review), not wrong rows; `Hb 136 g/dL`
    cost is worth it long-term (vs. waiting for GPU hardware).
 4. Test a genuinely scanned (non-digital) report end-to-end through
    PaddleOCR + Ollama — this path has never actually been validated.
-5. Once accuracy is trustworthy enough, start the backend integration
-   (a new endpoint/BAL/DAL wired to `UploadReportDocument`'s flow) —
-   not started yet.
+5. Backend integration — DB queue (Oct 8) + the worker now goes through
+   the separate OCR insertion API `backend/Health_360_OCR` (Oct 9): see
+   "OCR insertion API" and "PIMS integration" below. Next: a full run with
+   a real service-user login, then how digitization reads `tbl_ocr_data`.
 6. **Independent of the paddleocr track above:** `sarvam/`'s first real
    runs succeeded on both modes — same validation discipline as item 1
    above applies before trusting either: re-run the same

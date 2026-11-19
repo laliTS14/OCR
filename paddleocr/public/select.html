@@ -140,6 +140,26 @@
   .badge.missing{ background:var(--crit-tint); color:var(--crit); }
   .top-link{ font-size:0.82rem; color:var(--accent); font-weight:600; text-decoration:none; }
   @media (max-width:640px){ .sel-row .s-meta{ display:none; } }
+
+  /* ---------- Review & correct ---------- */
+  .rv-top{ display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.8rem 1rem; margin:0.9rem 0 1.1rem; }
+  .rv-top label, .rv-field{ display:flex; flex-direction:column; gap:0.25rem; font-size:0.68rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-faint); }
+  .rv-in{ font-family:inherit; font-size:0.85rem; color:var(--ink); background:var(--paper); border:1px solid var(--border); border-radius:6px; padding:0.4rem 0.5rem; width:100%; min-width:0; }
+  .rv-in:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-tint); }
+  .rv-in.mono{ font-family:"IBM Plex Mono", monospace; }
+  .rv-in.changed{ border-color:var(--warn); background:var(--warn-tint); }
+  #rvTable td{ padding:0.35rem 0.4rem; }
+  #rvTable th{ padding:0.5rem 0.4rem; }
+  #rvTable tr.rv-low td:first-child{ box-shadow:inset 3px 0 0 var(--warn); }
+  #rvTable tr.rv-deleted .rv-in{ text-decoration:line-through; opacity:0.45; }
+  #rvTable tr.rv-added td:first-child{ box-shadow:inset 3px 0 0 var(--good); }
+  .rv-conf{ font-size:0.7rem; color:var(--warn); white-space:nowrap; }
+  .rv-del{ padding:0.3rem 0.55rem; font-size:0.75rem; }
+  .rv-actions{ display:flex; gap:0.8rem; align-items:center; flex-wrap:wrap; margin-top:1rem; }
+  .rv-check{ display:flex; gap:0.5rem; align-items:flex-start; font-size:0.85rem; color:var(--ink); }
+  .rv-check input{ accent-color:var(--accent); margin-top:0.2rem; }
+  .rv-msg{ font-size:0.84rem; }
+  .rv-msg.ok{ color:var(--good); } .rv-msg.err{ color:var(--crit); }
 </style>
 </head>
 <body>
@@ -177,6 +197,7 @@
       <option value="rules">Rules only (no AI)</option>
       <option value="llm">AI only</option>
     </select>
+    <label class="file-chip" title="Also read scanned pages with Tesseract, for comparison: its result comes back separately (stages.tesseract in the response), the result below stays RapidOCR's (needs OCR_DOUBLE_ENABLED=true on the server)"><input type="checkbox" id="doubleOcr"> Double OCR</label>
     <button class="btn btn-primary" id="runBtn" type="button" disabled>Extract selected</button>
   </div>
 
@@ -190,6 +211,34 @@
       <div id="selList"></div>
     </section>
     <div id="panelValidated"></div>
+    <section class="card select-card" id="reviewCard">
+      <div class="select-actions" style="justify-content:space-between;">
+        <h3>Review &amp; correct</h3>
+        <label class="rv-check" style="font-size:0.8rem;"><input type="checkbox" id="rvOnlyUnsure"> Show only medium / low confidence rows</label>
+      </div>
+      <div class="stage-panel-head" style="margin-top:0.4rem;">Fix any wrong test, value, unit, range or report type; delete junk rows; add tests the extraction missed. Every correction is saved next to what the pipeline produced, to measure accuracy and (later) improve it. Changed fields turn amber.</div>
+      <div class="rv-top">
+        <label>Diagnostic centre (DC) *<input class="rv-in" id="rvDc" list="rvDcList" placeholder="e.g. Redcliffe Labs"></label>
+        <label>Name<input class="rv-in" data-pf="name"></label>
+        <label>Age<input class="rv-in" data-pf="age"></label>
+        <label>Sex<input class="rv-in" data-pf="sex"></label>
+        <label>Patient / UHID<input class="rv-in" data-pf="patient_id"></label>
+        <label>Contact number<input class="rv-in" data-pf="contact_number"></label>
+      </div>
+      <datalist id="rvDcList"></datalist>
+      <datalist id="rvTypeList"></datalist>
+      <div class="table-scroll"><table id="rvTable"><thead><tr><th style="width:19%">Report type</th><th style="width:25%">Test</th><th style="width:13%">Result</th><th style="width:12%">Unit</th><th style="width:20%">Reference range</th><th></th></tr></thead><tbody></tbody></table></div>
+      <div class="rv-actions"><button class="btn" id="rvAdd" type="button">+ Add a missed test</button></div>
+      <label class="rv-field" style="margin-top:1rem;">Notes (optional)<input class="rv-in" id="rvNotes" placeholder="anything unusual about this report"></label>
+      <div class="rv-actions">
+        <label class="rv-check"><input type="checkbox" id="rvGold"><span><b>Fully checked</b> &mdash; every row is right and every missed test is added. Use this report as an answer key for accuracy testing.</span></label>
+      </div>
+      <div class="rv-actions">
+        <button class="btn btn-primary" id="rvSave" type="button">Save review</button>
+        <span class="rv-msg" id="rvMsg"></span>
+      </div>
+      <div class="stage-panel-head" id="rvStats" style="margin-top:0.9rem;"></div>
+    </section>
     <section class="card select-card">
       <h3 style="margin-bottom:0.6rem;">Categorized JSON (before validation)</h3>
       <div class="json-dump" id="catJson"></div>
@@ -211,6 +260,7 @@
   var chosenFile = null;
 
   fetch('/api/report-types').then(function(r){ return r.json(); }).then(function(types){
+    document.getElementById('rvTypeList').innerHTML = types.map(function(t){ return '<option value="' + escapeHtml(t.label) + '">'; }).join('');
     // "All tests" = the whole report, every test (including ones in no
     // category); checked by default.
     typeGrid.innerHTML = '<label class="type-opt" style="grid-column:1/-1; font-weight:600;"><input type="checkbox" value="ALL" id="allTests" checked><span>All tests (whole report — every test, nothing skipped)</span></label>' +
@@ -268,12 +318,14 @@
     formData.append('file', chosenFile);
     formData.append('reportTypes', JSON.stringify(types));
     formData.append('engine', engine);
+    if (document.getElementById('doubleOcr').checked) formData.append('doubleOcr', '1');
     try {
       var res = await fetch('/api/extract-selected', { method: 'POST', body: formData });
       var payload = await res.json();
       if (!res.ok) throw new Error(payload.error || ('Request failed with status ' + res.status));
       renderSelection(payload);
       renderValidatedPanel(payload.stages.validated, payload);
+      startReview(payload);
       document.getElementById('catJson').textContent = JSON.stringify(payload.stages.categorized, null, 2);
       results.style.display = '';
     } catch (err) {
@@ -371,6 +423,7 @@
             (row.canonical && row.canonical.toLowerCase() !== String(row.test).toLowerCase() ? '<div style="font-weight:400; font-size:0.74rem; color:var(--ink-faint);">' + escapeHtml(row.canonical) + '</div>' : '') +
             (row.flags ? '<div style="font-weight:600; font-size:0.74rem; color:var(--crit);">' + escapeHtml(row.flags.join('; ')) + '</div>' : '') +
             (row.confidence && row.confidence !== 'high' ? '<div style="font-weight:400; font-size:0.72rem; color:var(--warn);">' + escapeHtml(row.confidence) + ' confidence</div>' : '') +
+            (row.ocr_engine ? '<div style="font-weight:400; font-size:0.72rem; color:var(--ink-faint);">' + escapeHtml(row.ocr_engine) + '</div>' : '') +
           '</td>' +
           '<td class="mono">' + escapeHtml(row.value) + '</td>' +
           '<td class="mono">' + escapeHtml(row.unit) + '</td>' +
@@ -382,6 +435,118 @@
     });
 
     el.innerHTML = html;
+  }
+
+  // ---------- Review & correct (POST /api/review — see reviewStore.js) ----------
+  var RV_FIELDS = ['report_type', 'test', 'value', 'unit', 'range'];
+  var rvBody = document.querySelector('#rvTable tbody');
+  var reviewDoc = null; // { docId, patient, rows: [{ rowId (null = added), orig, cur, deleted, confidence }] }
+  try { var lastDc = localStorage.getItem('pims.reviewDc'); if (lastDc) document.getElementById('rvDc').value = lastDc; } catch (e) {}
+
+  function startReview(payload){
+    var v = payload.stages.validated || {};
+    reviewDoc = { docId: payload.docId, rows: [], patient: v.patient || {} };
+    (v.reports || []).forEach(function(r){
+      (r.rows || []).forEach(function(row){
+        var o = { report_type: r.report_type || '', test: row.test || '', value: row.value || '', unit: row.unit || '', range: row.range || '' };
+        reviewDoc.rows.push({ rowId: row.rowId, orig: o, cur: Object.assign({}, o), deleted: false, confidence: row.confidence || 'high' });
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-pf]'), function(inp){
+      inp.value = reviewDoc.patient[inp.getAttribute('data-pf')] || '';
+      inp.dataset.orig = inp.value;
+      inp.classList.remove('changed');
+    });
+    document.getElementById('rvGold').checked = false;
+    document.getElementById('rvNotes').value = '';
+    setMsg('', '');
+    renderReviewRows();
+    loadStats();
+  }
+
+  function renderReviewRows(){
+    var onlyUnsure = document.getElementById('rvOnlyUnsure').checked;
+    rvBody.innerHTML = reviewDoc.rows.map(function(r, i){
+      if (onlyUnsure && r.rowId && r.confidence === 'high') return '';
+      var cls = (r.rowId ? (r.confidence !== 'high' ? 'rv-low' : '') : 'rv-added') + (r.deleted ? ' rv-deleted' : '');
+      return '<tr class="' + cls + '" data-i="' + i + '">' + RV_FIELDS.map(function(f){
+        var changed = r.rowId && r.cur[f] !== r.orig[f];
+        return '<td><input class="rv-in' + (f === 'test' || f === 'report_type' ? '' : ' mono') + (changed ? ' changed' : '') + '" data-f="' + f + '"' +
+          (f === 'report_type' ? ' list="rvTypeList"' : '') + ' value="' + escapeHtml(r.cur[f]) + '"' + (r.deleted ? ' disabled' : '') + '>' +
+          (f === 'test' && r.rowId && r.confidence !== 'high' ? '<div class="rv-conf">' + escapeHtml(r.confidence) + ' confidence</div>' : '') + '</td>';
+      }).join('') +
+      '<td><button class="btn rv-del" type="button" data-del="' + i + '">' + (r.deleted ? 'Undo' : (r.rowId ? 'Delete' : 'Remove')) + '</button></td></tr>';
+    }).join('') || '<tr><td colspan="6" class="empty-state" style="padding:1.5rem;">No rows to show.</td></tr>';
+  }
+
+  rvBody.addEventListener('input', function(e){
+    var f = e.target.getAttribute('data-f');
+    if (!f) return;
+    var r = reviewDoc.rows[+e.target.closest('tr').getAttribute('data-i')];
+    r.cur[f] = e.target.value;
+    e.target.classList.toggle('changed', !!r.rowId && r.cur[f] !== r.orig[f]);
+  });
+  rvBody.addEventListener('click', function(e){
+    var i = e.target.getAttribute('data-del');
+    if (i == null) return;
+    var r = reviewDoc.rows[+i];
+    if (!r.rowId) reviewDoc.rows.splice(+i, 1); else r.deleted = !r.deleted;
+    renderReviewRows();
+  });
+  document.getElementById('rvOnlyUnsure').addEventListener('change', function(){ if (reviewDoc) renderReviewRows(); });
+  document.getElementById('rvAdd').addEventListener('click', function(){
+    if (!reviewDoc) return;
+    var last = reviewDoc.rows[reviewDoc.rows.length - 1];
+    reviewDoc.rows.push({ rowId: null, orig: null, cur: { report_type: last ? last.cur.report_type : '', test: '', value: '', unit: '', range: '' }, deleted: false, confidence: 'high' });
+    renderReviewRows();
+    var inp = rvBody.querySelector('tr:last-child [data-f="test"]');
+    if (inp) inp.focus();
+  });
+  document.querySelector('.rv-top').addEventListener('input', function(e){
+    if (e.target.hasAttribute('data-pf')) e.target.classList.toggle('changed', e.target.value !== e.target.dataset.orig);
+  });
+
+  function setMsg(text, kind){ var m = document.getElementById('rvMsg'); m.textContent = text; m.className = 'rv-msg ' + (kind || ''); }
+
+  document.getElementById('rvSave').addEventListener('click', async function(){
+    if (!reviewDoc) return;
+    var dc = document.getElementById('rvDc').value.trim();
+    if (!dc){ setMsg('Enter the diagnostic centre (DC) name first.', 'err'); document.getElementById('rvDc').focus(); return; }
+    var patient = {};
+    Array.prototype.forEach.call(document.querySelectorAll('[data-pf]'), function(inp){ patient[inp.getAttribute('data-pf')] = inp.value; });
+    var body = {
+      docId: reviewDoc.docId, dc: dc, fullyChecked: document.getElementById('rvGold').checked,
+      notes: document.getElementById('rvNotes').value, patient: patient,
+      rows: reviewDoc.rows.map(function(r){ return Object.assign({ rowId: r.rowId, deleted: r.deleted }, r.cur); }),
+    };
+    var btn = this;
+    btn.disabled = true;
+    try {
+      var res = await fetch('/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      var out = await res.json();
+      if (!res.ok) throw new Error(out.error || ('Request failed with status ' + res.status));
+      try { localStorage.setItem('pims.reviewDc', dc); } catch (e) {}
+      var c = out.counts || {};
+      setMsg('Saved — ' + ['ok', 'edited', 'retyped', 'deleted', 'added'].filter(function(k){ return c[k]; }).map(function(k){ return c[k] + ' ' + k; }).join(', ') +
+        (out.fullyChecked ? ' · added to the answer key' : ''), 'ok');
+      showStats(out.stats);
+    } catch (err) {
+      setMsg('Could not save: ' + err.message, 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  function loadStats(){
+    fetch('/api/review-stats').then(function(r){ return r.json(); }).then(showStats).catch(function(){});
+  }
+  function showStats(s){
+    if (!s) return;
+    document.getElementById('rvDcList').innerHTML = Object.keys(s.byDc || {}).map(function(d){ return '<option value="' + escapeHtml(d) + '">'; }).join('');
+    document.getElementById('rvStats').innerHTML = s.reviews
+      ? 'So far: <b>' + s.reviews + '</b> review(s), <b>' + s.rowsReviewed + '</b> rows checked, <b>' +
+        Math.round((s.rowsCorrectAsExtracted || 0) * 100) + '%</b> correct as extracted &middot; answer key: <b>' + s.goldDocuments + '</b> report(s) from <b>' + s.goldDcs + '</b> DC(s)'
+      : 'No reviews saved yet.';
   }
 
   function escapeHtml(s){
