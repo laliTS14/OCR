@@ -190,12 +190,21 @@ then the Tesseract result) and saves nothing. Then close both service windows.
 
 ## 8. Register the boot tasks
 
+Stop the services you started by hand in steps 4 and 5 first (Ctrl+C) — the
+tasks start their own copies on the same ports.
+
 In an **elevated** PowerShell (Run as Administrator):
 
 ```powershell
 cd D:\Health360\OCR\paddleocr
+Get-ChildItem .\deploy | Unblock-File   # files from a downloaded zip are blocked
 .\deploy\install-tasks.ps1
 ```
+
+Without `Unblock-File` a zip-installed copy fails with "install-tasks.ps1 is
+not digitally signed. You cannot run this script on the current system."
+(Alternative, for this one run only:
+`powershell -ExecutionPolicy Bypass -File .\deploy\install-tasks.ps1`.)
 
 Expected output:
 
