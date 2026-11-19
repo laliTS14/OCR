@@ -40,7 +40,8 @@ Leave enough room: about 2 GB for the code, venvs and models, plus the logs.
 | Program | Version | Notes |
 |---|---|---|
 | Node.js | 20 LTS or newer (tested on 24) | add to PATH (installer default) |
-| Python | **3.12** (64-bit) | tick "Add python.exe to PATH" and install the `py` launcher |
+| Python | **3.12** (64-bit) | tick "Add python.exe to PATH" and install the `py` launcher (python.org installer, not the Microsoft Store) |
+| Microsoft Visual C++ Redistributable 2015–2022 (x64) | latest | https://aka.ms/vs/17/release/vc_redist.x64.exe — onnxruntime / OpenCV need it; without it Python exits **silently** when importing them (no error, nothing printed) |
 | Tesseract OCR | 5.x, UB Mannheim Windows build | https://github.com/UB-Mannheim/tesseract/wiki — default folder `C:\Program Files\Tesseract-OCR` (English is included) |
 | Git | any | optional — only if the server can reach GitHub (step 3) |
 
@@ -59,6 +60,10 @@ because the scheduled task runs as SYSTEM.
 ## 3. Get the code
 
 Pick a folder that is not under a user profile, for example `D:\Health360`.
+
+Do **not** use GitHub's "Download ZIP" (`OCR-main`): `main` is an old
+version without the worker's current code, the Tesseract service or this
+guide. Use the deploy zip, or clone the `ocr-pims-integration` branch.
 
 **No GitHub on the server (usual case): the deploy zip.** On the dev laptop
 it is built from a commit, e.g. `OCR\deploy-package\OCR-worker-<commit>.zip`
@@ -287,3 +292,20 @@ Tesseract read at least one page; a digital PDF has nothing for it to read
 | Tesseract result FAILED with `http://localhost:8799` in the error | Tesseract service not running — check `tesseract-service.log` (`tesseract.exe` not found? step 2) |
 | `Report is not claimed by this worker` | the report sat in PROCESSING too long (machine slept / worker stopped) and was re-queued; it will be done again |
 | `Set REPORT_UPLOAD_BASE_URL or REPORT_UPLOAD_BASE_FOLDER` | step 6 |
+
+**A Python command prints nothing at all and just returns** (even
+`python -c "print('hi')"` after an import): a native library crashed while
+loading. Find which one, and the exit code:
+
+```powershell
+.\.venv-rapid\Scripts\python -c "print('python ok')"; "exit $LASTEXITCODE"
+foreach ($m in 'numpy', 'cv2', 'onnxruntime', 'rapidocr_onnxruntime') {
+  .\.venv-rapid\Scripts\python -c "import $m; print('$m ok')"; "$m -> exit $LASTEXITCODE"
+}
+```
+
+| Exit code | Meaning | Fix |
+|---|---|---|
+| `-1073741515` (0xC0000135) | a DLL is missing | install the Visual C++ Redistributable x64 (step 2), open a new PowerShell, retry |
+| `-1073741795` (0xC000001D) | the CPU (often a VM's virtual CPU) lacks AVX instructions the wheels need | ask for the VM's CPU type to be set to "host" / expose AVX; otherwise older library versions are needed |
+| `9009` or `103` on `print('python ok')` | the venv points at the Microsoft Store Python stub | install Python 3.12 from python.org, delete `.venv-rapid`, recreate it (step 4) |
